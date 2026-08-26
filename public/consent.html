@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Ambit — Consent</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #fff; --border: #e2e4e9; --text: #1a1d26; --muted: #6b7280;
+    --accent: #2f5fd6; --accent-weak: #eaf0ff; --ok: #1a8a5f; --danger: #c23b3b; --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { background: var(--panel); border-bottom: 1px solid var(--border); padding: 16px 32px; }
+  header h1 { font-size: 16px; margin: 0; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px; margin-bottom: 14px;
+  }
+  .card .subject { font-weight: 700; font-size: 15px; margin: 0 0 4px; }
+  .card .plain { color: var(--text); font-size: 13px; margin: 0 0 10px; }
+  .card .meta { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+  .actions { display: flex; gap: 8px; }
+  button {
+    border: none; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  button.approve { background: var(--ok); color: white; }
+  button.deny { background: var(--danger); color: white; }
+  button.approve:disabled, button.deny:disabled { opacity: 0.5; cursor: default; }
+  .empty { color: var(--muted); font-size: 13px; padding: 24px 0; text-align: center; }
+  .demo-form {
+    background: var(--panel); border: 1px dashed var(--border); border-radius: var(--radius);
+    padding: 18px; margin-top: 28px;
+  }
+  .demo-form p.label { margin: 0 0 10px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .demo-form input { width: 100%; margin-bottom: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+  .demo-form button { background: var(--accent); color: white; }
+  .toast { font-size: 13px; margin-top: 10px; }
+  .toast.error { color: var(--danger); }
+  .toast.ok { color: var(--ok); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Ambit — Consent</h1>
+    <p>Every token request waits here until a human approves or denies it.</p>
+  </header>
+  <main>
+    <h2>Pending requests</h2>
+    <div id="requests">Loading…</div>
+
+    <div class="demo-form">
+      <p class="label">Submit a test request (stands in for the SDK — not yet built)</p>
+      <input id="subject" placeholder="Subject, e.g. agent-42" />
+      <input id="scope" placeholder="Scope, comma-separated, e.g. email:send" />
+      <input id="ttl" placeholder="TTL seconds, e.g. 300" />
+      <button id="submit-request">Submit request</button>
+      <div id="submit-toast"></div>
+    </div>
+  </main>
+
+  <script>
+    async function loadRequests() {
+      const el = document.getElementById("requests");
+      const res = await fetch("/requests", { cache: "no-store" });
+      const requests = await res.json();
+
+      if (requests.length === 0) {
+        el.innerHTML = `<div class="empty">No pending requests.</div>`;
+        return;
+      }
+
+      el.innerHTML = requests.map((r) => `
+        <div class="card" data-id="${r.id}">
+          <p class="subject">${escapeHtml(r.subject)}</p>
+          <p class="plain">Requesting: ${r.scope.map(escapeHtml).join(", ")} — valid for ${r.ttlSeconds} seconds if approved.</p>
+          <p class="meta">Requested ${new Date(r.requestedAt).toLocaleString()}</p>
+          <div class="actions">
+            <button class="approve" data-action="approve" data-id="${r.id}">Approve</button>
+            <button class="deny" data-action="deny" data-id="${r.id}">Deny</button>
+          </div>
+          <div class="toast" data-toast-for="${r.id}"></div>
+        </div>
+      `).join("");
+
+      el.querySelectorAll("button[data-action]").forEach((btn) => {
+        btn.addEventListener("click", () => decide(btn.dataset.id, btn.dataset.action));
+      });
+    }
+
+    async function decide(id, action) {
+      const card = document.querySelector(`.card[data-id="${id}"]`);
+      const toast = card.querySelector(".toast");
+      card.querySelectorAll("button").forEach((b) => (b.disabled = true));
+
+      const body = { approver: "demo-approver" };
+      if (action === "deny") body.reasonCode = "scope_too_broad";
+
+      const res = await fetch(`/requests/${id}/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (res.status === 404 || res.status === 409) {
+        const { error } = await res.json();
+        toast.textContent = error;
+        toast.className = "toast error";
+        card.querySelectorAll("button").forEach((b) => (b.disabled = false));
+        return;
+      }
+
+      await loadRequests();
+    }
+
+    document.getElementById("submit-request").addEventListener("click", async () => {
+      const subject = document.getElementById("subject").value.trim();
+      const scope = document.getElementById("scope").value.split(",").map((s) => s.trim()).filter(Boolean);
+      const ttlSeconds = Number(document.getElementById("ttl").value);
+      const toast = document.getElementById("submit-toast");
+
+      const res = await fetch("/requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subject, scope, ttlSeconds }),
+      });
+
+      if (!res.ok) {
+        const { error } = await res.json();
+        toast.textContent = error;
+        toast.className = "toast error";
+        return;
+      }
+
+      toast.textContent = "Request submitted.";
+      toast.className = "toast ok";
+      document.getElementById("subject").value = "";
+      document.getElementById("scope").value = "";
+      document.getElementById("ttl").value = "";
+      await loadRequests();
+    });
+
+    function escapeHtml(str) {
+      const div = document.createElement("div");
+      div.textContent = str == null ? "" : String(str);
+      return div.innerHTML;
+    }
+
+    loadRequests();
+  </script>
+</body>
+</html>

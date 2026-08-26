@@ -130,21 +130,35 @@
       "criteria": [
         {
           "text": "Given a token request, when it is displayed, then the approver can approve or deny it.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given a denied request, when it is submitted, then the token is not issued.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust: Approval actions are logged.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
-      "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "files_touched": [
+        "src/tokenRequest.ts", "src/tokenRequest.test.ts", "src/requestStore.ts",
+        "src/auditLog.ts", "src/server.ts", "public/consent.html",
+        "package.json", "package-lock.json"
+      ],
+      "tests_added": [
+        "requestToken > creates a pending request, not a token",
+        "approveRequest > issues a real token once an approver approves",
+        "approveRequest > logs the approval with the approver as actor",
+        "approveRequest > refuses to approve an unknown request id",
+        "approveRequest > refuses to approve the same request twice",
+        "denyRequest > does not issue a token when a request is denied",
+        "denyRequest > logs the denial with the approver, and a reason code when given",
+        "denyRequest > refuses to deny an unknown request id",
+        "denyRequest > refuses to deny an already-decided request"
+      ],
+      "notes": "This is the story that actually closes the demo-path gap flagged at the end of STORY-002: added a real Express server (src/server.ts) and a Consent UI page (public/consent.html) — first genuinely interactive surface in the whole build, not just code+tests. Domain logic (RequestStore, requestToken/approveRequest/denyRequest) and the HTTP+UI layer were built as two separate confirmed steps. AuditLogEntry gained requestId/actor fields and request_approved/request_denied decision values; tokenId became optional since a denied request never gets one — verified via curl that a denied request's audit entry genuinely has no tokenId field at all. End-to-end verified over real HTTP, not mocked: submitted a request through the actual browser UI, approved it, confirmed a real token exists in the store, enforced an action against it (allowed), revoked it, confirmed the next enforcement is denied — then a separate request through the UI, denied via the Deny button, confirmed via the audit log that no token was ever created for it. Also smoke-tested error paths over HTTP directly (not just unit tests): double-approve → 409, unknown request id → 404, unknown token id on enforce → 200 with allowed:false (guardrail: deny, don't error, when validity can't be confirmed), missing required field → 400.",
+      "updated_at": "2026-08-26T14:23:17Z",
       "verification": null
     },
     {
