@@ -62,7 +62,7 @@
         },
         {
           "text": "Given a revoked token, when it is used, then the action is blocked.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust: Every action is logged in the Audit Log.",
@@ -71,21 +71,23 @@
       ],
       "files_touched": [
         "src/token.ts", "src/token.test.ts", "src/auditLog.ts", "src/auditLog.test.ts",
-        "package.json", "tsconfig.json"
+        "src/tokenStore.ts", "package.json", "tsconfig.json"
       ],
       "tests_added": [
         "issueToken > issues an active token scoped and expiring as requested",
+        "issueToken > saves the issued token in the store, so it can be enforced against later",
         "issueToken > refuses to issue a token with an empty scope",
         "issueToken > refuses to issue a token that would already be expired",
         "enforceToken > allows an action within scope on an active, unexpired token",
         "enforceToken > logs every enforcement decision to the audit log",
         "enforceToken > denies and logs an action outside the token's scope",
         "enforceToken > denies an action once the token has expired",
+        "enforceToken > denies and logs an action against an unknown token id",
         "AuditLog > returns a fresh array from entries() each call, not a live reference the caller could mutate",
         "AuditLog > assigns each entry a unique id and the given occurredAt"
       ],
-      "notes": "Issuance and enforcement both work and are logged (criteria 1 and 3 genuinely true). Criterion 2 (revoked token blocked) is left false on purpose: enforceToken's status!==\"active\" check exists and denies with reasonCode \"revoked\", but Token.status is currently typed as the single literal \"active\" since nothing can revoke a token yet — that's STORY-002. Leaving this honestly false rather than writing a test that fakes revocation by hand.",
-      "updated_at": "2026-08-26T13:46:05Z",
+      "notes": "Criterion 2 (revoked token blocked) is now genuinely true too — not from any test written for THIS story, but because STORY-002 (revokeToken + TokenStore) landed afterward and made it real; see revokeToken.test.ts. Flipped honestly rather than leaving it stale now that the underlying capability exists. issueToken and enforceToken both changed signature when STORY-002 introduced TokenStore as the source of truth (issueToken now takes a store and saves into it; enforceToken takes a token id and looks it up fresh, not a Token object) — this file's own tests were updated to match, all still passing.",
+      "updated_at": "2026-08-26T13:58:28Z",
       "verification": null
     },
     {
@@ -95,21 +97,30 @@
       "criteria": [
         {
           "text": "Given a token, when it is revoked, then its next call fails immediately.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given a revoked token, when it is used, then the action is blocked.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust: Revocation is logged with a reason code.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
-      "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "files_touched": [
+        "src/token.ts", "src/tokenStore.ts", "src/revokeToken.test.ts",
+        "src/token.test.ts", "src/auditLog.ts"
+      ],
+      "tests_added": [
+        "revokeToken > makes the very next enforceToken call by id fail, right after revocation",
+        "revokeToken > blocks the action, not just reports a decision",
+        "revokeToken > logs the revocation itself with the given reason code",
+        "revokeToken > updates the token's own status to revoked in the store",
+        "revokeToken > refuses to revoke a token id that was never issued"
+      ],
+      "notes": "Built a real TokenStore (in-memory Map, single source of truth by token id) rather than passing Token objects by value between calls, per explicit user direction that this build should demonstrate real, enterprise-grade behavior — not tests that pass by construction. enforceToken and revokeToken both re-read the store fresh on every call, so revocation is provably real-time: the proof in revokeToken.test.ts looks the token up by id again after revoking, never reuses the object issueToken originally returned. AuditLogEntry's decision union grew a third value (\"revoked\", alongside \"allowed\"/\"denied\") rather than starting a second log, per REQ-005's \"one immutable audit log\" framing. RevocationReason is a closed union (compromised/no_longer_needed/policy_violation/superseded), not a free-form string, since \"logged with a reason code\" implies a defined code, not arbitrary text.",
+      "updated_at": "2026-08-26T13:58:28Z",
       "verification": null
     },
     {

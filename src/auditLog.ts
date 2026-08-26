@@ -1,4 +1,8 @@
 // REQ-005: log every allowed and blocked action to an immutable audit log.
+// "revoked" isn't an enforcement decision but shares the same trail — REQ-010
+// (reason-coded denials) and STORY-002's "revocation logged with a reason
+// code" are both instances of the same underlying need: one durable record
+// of what happened to a token and why, not two separate logs to cross-check.
 
 export interface AuditLogEntry {
   id: string;
@@ -6,7 +10,7 @@ export interface AuditLogEntry {
   tokenId: string;
   subject: string;
   action: string;
-  decision: "allowed" | "denied";
+  decision: "allowed" | "denied" | "revoked";
   reasonCode?: string;
 }
 
