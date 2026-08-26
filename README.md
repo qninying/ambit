@@ -29,7 +29,7 @@ sequence land in the Audit Log with its chain-verified badge.
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **116 tests passing.**
+in a unit test. Current count: **122 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -82,7 +82,14 @@ in a unit test. Current count: **116 tests passing.**
   success. `GET /circuit-breaker` for live state, `POST
   /circuit-breaker/simulate-outage` to actually trip it — the store is
   in-memory and can't fail on its own (see below), so this is what makes
-  the fail-closed behavior demonstrable rather than asserted.
+  the fail-closed behavior demonstrable rather than asserted. Unlike every
+  other route in this API, `simulate-outage` requires a shared-secret
+  `x-ambit-admin-key` header (set `ADMIN_TOGGLE_KEY` to enable it — refused
+  by default otherwise): it's the one route that can take the entire real
+  Token & Policy Store down with a single unauthenticated request, so it got
+  a narrow stopgap pulled forward ahead of the rest of
+  [ADR-009](adr/ADR-009-trust-boundary-hardening-deferred-to-post-platform-phase.md)'s
+  deferred hardening work.
 
 **What's explicitly not real yet:** persistence. Everything above resets on
 a server restart — an in-memory `Map`-backed store, chosen deliberately (see

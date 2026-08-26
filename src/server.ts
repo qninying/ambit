@@ -233,15 +233,47 @@ app.get("/circuit-breaker", (_req, res) => {
   res.json({ state: storeCircuitBreaker.state() });
 });
 
-// Same demo/ops convenience as /mock-endpoints/:system/down, same reasoning:
-// TokenStore/PolicyStore are in-memory and can't fail on their own (ADR-006),
-// so this is what lets the "store is unreachable" path actually be shown,
-// not just asserted in a test. Deliberately not gated behind auth — see
-// ADR-009, which already names the whole API's lack of caller authentication
-// as a known, tracked gap; this route is not a special exception to that.
-app.post("/circuit-breaker/simulate-outage", (req, res) => {
+// Unlike /mock-endpoints/:system/down (which only fakes a downstream
+// integration being unavailable — never touches real state), this route
+// disables the ENTIRE real Token & Policy Store: every enforce, issue,
+// revoke, delegate, and policy operation in the system, for as long as it's
+// left on. That is a materially different blast radius, not the same
+// "demo convenience" as the mock-endpoint toggle it was originally modeled
+// on — an unauthenticated caller could take the whole product down with one
+// request and no prior knowledge of any real id. This is a narrow, single-
+// route stopgap (a shared secret, not real per-caller identity) pulled
+// forward ahead of ADR-009's full hardening phase specifically because of
+// that severity — see ADR-009's "What would change this decision."
+function requireAdminToggleKey(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const configuredKey = process.env.ADMIN_TOGGLE_KEY;
+  if (!configuredKey) {
+    res.status(403).json({ error: "fault-injection routes are disabled — set ADMIN_TOGGLE_KEY to enable them" });
+    return;
+  }
+  if (req.header("x-ambit-admin-key") !== configuredKey) {
+    res.status(403).json({ error: "missing or invalid x-ambit-admin-key header" });
+    return;
+  }
+  next();
+}
+
+app.post("/circuit-breaker/simulate-outage", requireAdminToggleKey, (req, res) => {
   const down = req.body?.down !== false;
   storeCircuitBreaker.simulateOutage(down);
+  // The toggle call itself is a real, audit-worthy fact distinct from the
+  // breaker's own state-machine transitions (onStateChange, above) — an
+  // operator investigating "why did this trip" needs to see that someone
+  // deliberately engaged fault injection, even on a call where the real
+  // failure threshold hasn't been crossed yet. actor distinguishes this
+  // from the state machine's own organic transitions (subject: "system",
+  // no actor).
+  auditLog.record({
+    subject: "system",
+    action: "circuit_breaker_simulate_outage",
+    decision: down ? "circuit_opened" : "circuit_closed",
+    actor: "admin-toggle",
+    reasonCode: "manual_fault_injection",
+  });
   res.status(200).json({ down, state: storeCircuitBreaker.state() });
 });
 

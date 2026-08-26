@@ -1,6 +1,6 @@
 # ADR-009: Trust-Boundary Hardening Deferred Until After the Platform's 12-Story Plan — Tracked Explicitly, Not Left Implicit
 
-**Status:** Deferred by deliberate decision — not started, not forgotten. Revisit once STORY-012 lands.
+**Status:** Deferred by deliberate decision — not started, not forgotten. Revisit once STORY-012 lands. **Amended 2026-08-26** (same day, after STORY-009) — one narrow stopgap pulled forward per the "What would change this decision" clause below; the four-item bundle itself is still fully deferred and undiminished by it. See "STORY-009 amendment" below.
 **Owner:** Quincy Nkwain Ninying
 **Date:** 2026-08-26
 **Component:** `src/server.ts`, `src/tokenRequest.ts`, `src/token.ts`, `sdk/ambitClient.ts`, every route in `src/server.ts`
@@ -57,3 +57,13 @@ Option A was rejected specifically because of the "no gaps deferred" standard th
 ## What would change this decision
 
 A demo audience or reviewer with direct API access before this phase starts would be a real reason to pull a minimal slice of Tier 1 forward — at minimum, item 2 (verified approver identity) — rather than wait for the full bundle.
+
+## STORY-009 amendment: a sharper instance, pulled forward
+
+STORY-009's fail-closed circuit breaker (see its entry in [PROGRESS.md](../PROGRESS.md)) added `POST /circuit-breaker/simulate-outage` — a fault-injection route needed to make "the store is unreachable" demonstrable at all, since `TokenStore`/`PolicyStore` are in-memory and can't fail on their own (see [ADR-006](ADR-006-in-memory-persistence-now.md)). It was initially built with the same reasoning already applied to `POST /mock-endpoints/:system/down` from STORY-005: no auth, because it's a demo convenience.
+
+That parallel doesn't hold up under scrutiny, and the user caught it by asking directly whether STORY-009 introduced any new weak trust boundaries. `/mock-endpoints/:system/down` only fakes a downstream integration being unavailable — it never touches real state. `/circuit-breaker/simulate-outage` disables the entire real Token & Policy Store: every enforce, issue, revoke, delegate, and policy operation, system-wide, for as long as it's left on — and because the outage flag is checked unconditionally on every attempt including the breaker's own half-open probe, the breaker never self-heals while it's set; it stays open indefinitely until someone manually clears it. This is qualitatively worse than any of the three gaps in the original Context section above: forging an approval or replaying a token at least requires a real, valid id. This route requires zero prior knowledge — one POST, no valid subject, no valid token, no valid request — to take the whole product down.
+
+**Applied immediately, not deferred to the post-STORY-012 phase:** `requireAdminToggleKey` — a single shared-secret header check (`x-ambit-admin-key` against `ADMIN_TOGGLE_KEY`), gating only this one route. Fails closed by default: if `ADMIN_TOGGLE_KEY` isn't configured at all, the route refuses everything with a 403 rather than defaulting open. The toggle call itself is now also audit-logged (`action: "circuit_breaker_simulate_outage"`, `actor: "admin-toggle"`) as its own fact, distinct from the breaker's own organic state-transition entries — closing a second, compounding gap: previously nothing recorded that anyone had touched the toggle at all until enough real failures crossed the threshold on their own.
+
+**This is explicitly not item 1 from the Decision section above, and does not shrink that bundle.** A single shared secret is not per-caller identity — it can't distinguish one legitimate operator from another, can't be individually revoked, and doesn't touch any of the other unauthenticated routes named in Context. All four items in the Decision section remain fully open, exactly as scoped, still deferred to the dedicated phase after STORY-012.
