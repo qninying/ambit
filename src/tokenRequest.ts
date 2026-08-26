@@ -3,6 +3,7 @@
 // STORY-001 stays the "a token is now real" primitive; nothing here bypasses
 // it. Approval calls it; denial never does.
 
+import type { AnomalyDetector } from "./anomalyDetector.js";
 import type { AuditLog } from "./auditLog.js";
 import { issueToken, type Token, type TokenRequest } from "./token.js";
 import type { TokenStore } from "./tokenStore.js";
@@ -32,14 +33,36 @@ export class RequestNotPendingError extends Error {
   }
 }
 
-export function requestToken(request: TokenRequest, requestStore: RequestStore): PendingRequest {
+// REQ-016: every submission is checked for anomalies automatically, here —
+// not as a separate step a caller could forget to call. Only writes an audit
+// entry when something actually fires; a normal request produces no extra
+// entry, matching "no alert is triggered" literally.
+export function requestToken(
+  request: TokenRequest,
+  requestStore: RequestStore,
+  anomalyDetector: AnomalyDetector,
+  auditLog: AuditLog,
+  now: Date = new Date(),
+): PendingRequest {
   const pending: PendingRequest = {
     ...request,
     id: crypto.randomUUID(),
     status: "pending",
-    requestedAt: new Date(),
+    requestedAt: now,
   };
   requestStore.save(pending);
+
+  const anomaly = anomalyDetector.check(request.subject, request.scope, now);
+  if (anomaly.anomalous) {
+    auditLog.record({
+      requestId: pending.id,
+      subject: request.subject,
+      action: "anomaly_check",
+      decision: "anomaly_detected",
+      reasonCode: anomaly.signals.join(","),
+    }, now);
+  }
+
   return pending;
 }
 

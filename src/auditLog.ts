@@ -14,7 +14,7 @@ export interface AuditLogEntry {
   requestId?: string;
   subject: string;
   action: string;
-  decision: "allowed" | "denied" | "revoked" | "request_approved" | "request_denied";
+  decision: "allowed" | "denied" | "revoked" | "request_approved" | "request_denied" | "anomaly_detected";
   reasonCode?: string;
   // Who performed a human-driven action (an approver), as opposed to
   // `subject`, which is the AI agent the token is for.

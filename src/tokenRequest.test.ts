@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AnomalyDetector } from "./anomalyDetector.js";
 import { AuditLog } from "./auditLog.js";
 import { RequestStore } from "./requestStore.js";
 import { TokenStore } from "./tokenStore.js";
@@ -11,17 +12,68 @@ import {
 } from "./tokenRequest.js";
 
 function setup() {
-  return { requestStore: new RequestStore(), tokenStore: new TokenStore(), auditLog: new AuditLog() };
+  return {
+    requestStore: new RequestStore(),
+    tokenStore: new TokenStore(),
+    auditLog: new AuditLog(),
+    anomalyDetector: new AnomalyDetector(),
+  };
 }
 
 describe("requestToken", () => {
   it("creates a pending request, not a token", () => {
-    const { requestStore } = setup();
-    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore);
+    const { requestStore, anomalyDetector, auditLog } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
     expect(pending.id).toBeTruthy();
     expect(pending.status).toBe("pending");
     expect(requestStore.get(pending.id)).toEqual(pending);
+  });
+
+  // Acceptance: "Given a normal request, when it is processed, then no alert
+  // is triggered." — checked as an absence, not just an unasserted default.
+  it("does not log an anomaly alert for a normal request", () => {
+    const { requestStore, anomalyDetector, auditLog } = setup();
+    requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+
+    expect(auditLog.entries()).toHaveLength(0);
+  });
+
+  // Acceptance: "Given a token request, when it is anomalous, then an alert
+  // is triggered." + "Trust: Anomaly detection actions are logged."
+  it("logs an anomaly alert for a request with unusually broad scope", () => {
+    const { requestStore, anomalyDetector, auditLog } = setup();
+    const pending = requestToken(
+      { subject: "agent-42", scope: ["email:send", "payment:charge", "sms:send", "crm:read"], ttlSeconds: 300 },
+      requestStore,
+      anomalyDetector,
+      auditLog,
+    );
+
+    expect(auditLog.entries()).toEqual([
+      expect.objectContaining({
+        requestId: pending.id,
+        subject: "agent-42",
+        action: "anomaly_check",
+        decision: "anomaly_detected",
+        reasonCode: "scope_too_broad",
+      }),
+    ]);
+  });
+
+  // The request itself is still created — anomaly detection is a signal,
+  // not a gate. Denying it, if warranted, is still the approver's call
+  // (STORY-003), not something this story decides on its own.
+  it("still creates the pending request even when it's flagged as anomalous", () => {
+    const { requestStore, anomalyDetector, auditLog } = setup();
+    const pending = requestToken(
+      { subject: "agent-42", scope: ["email:send", "payment:charge", "sms:send", "crm:read"], ttlSeconds: 300 },
+      requestStore,
+      anomalyDetector,
+      auditLog,
+    );
+
+    expect(requestStore.get(pending.id)?.status).toBe("pending");
   });
 });
 
@@ -29,8 +81,8 @@ describe("approveRequest", () => {
   // Acceptance: "Given a token request, when it is displayed, then the
   // approver can approve or deny it" — the approve half.
   it("issues a real token once an approver approves", () => {
-    const { requestStore, tokenStore, auditLog } = setup();
-    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore);
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
     const token = approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
@@ -42,8 +94,8 @@ describe("approveRequest", () => {
 
   // Acceptance: "Trust: Approval actions are logged."
   it("logs the approval with the approver as actor", () => {
-    const { requestStore, tokenStore, auditLog } = setup();
-    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore);
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
     const token = approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
@@ -58,7 +110,7 @@ describe("approveRequest", () => {
   });
 
   it("refuses to approve an unknown request id", () => {
-    const { requestStore, tokenStore, auditLog } = setup();
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
     expect(() => approveRequest("not-a-real-id", requestStore, tokenStore, auditLog, "approver-1")).toThrow(
       UnknownRequestError,
     );
@@ -66,8 +118,8 @@ describe("approveRequest", () => {
 
   // Idempotency guardrail: approving twice must not issue two tokens.
   it("refuses to approve the same request twice", () => {
-    const { requestStore, tokenStore, auditLog } = setup();
-    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore);
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
     approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
     expect(() => approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1")).toThrow(
@@ -82,8 +134,8 @@ describe("denyRequest", () => {
   // prevent, checked directly against the token store, not just the return
   // value of denyRequest (which returns nothing).
   it("does not issue a token when a request is denied", () => {
-    const { requestStore, tokenStore, auditLog } = setup();
-    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore);
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
     denyRequest(pending.id, requestStore, auditLog, "approver-1", "scope_too_broad");
 
@@ -94,8 +146,8 @@ describe("denyRequest", () => {
   });
 
   it("logs the denial with the approver, and a reason code when given", () => {
-    const { requestStore, auditLog } = setup();
-    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore);
+    const { requestStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
     denyRequest(pending.id, requestStore, auditLog, "approver-1", "scope_too_broad");
 
@@ -110,13 +162,13 @@ describe("denyRequest", () => {
   });
 
   it("refuses to deny an unknown request id", () => {
-    const { requestStore, auditLog } = setup();
+    const { requestStore, auditLog, anomalyDetector } = setup();
     expect(() => denyRequest("not-a-real-id", requestStore, auditLog, "approver-1")).toThrow(UnknownRequestError);
   });
 
   it("refuses to deny an already-decided request", () => {
-    const { requestStore, tokenStore, auditLog } = setup();
-    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore);
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
     approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
     expect(() => denyRequest(pending.id, requestStore, auditLog, "approver-2")).toThrow(RequestNotPendingError);

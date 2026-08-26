@@ -6,6 +6,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { AnomalyDetector } from "./anomalyDetector.js";
 import { AuditLog } from "./auditLog.js";
 import { InvalidScopeError, UnknownTokenError, enforceToken, revokeToken, type RevocationReason } from "./token.js";
 import { delegateToken } from "./delegation.js";
@@ -15,9 +16,23 @@ import { TokenStore } from "./tokenStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+function envNumber(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 const tokenStore = new TokenStore();
 const requestStore = new RequestStore();
 const auditLog = new AuditLog();
+// Thresholds are a judgment call — overridable without a code change via
+// ANOMALY_MAX_SCOPE_BREADTH / ANOMALY_VELOCITY_WINDOW_MS / ANOMALY_MAX_REQUESTS_PER_WINDOW.
+const anomalyDetector = new AnomalyDetector({
+  maxScopeBreadth: envNumber("ANOMALY_MAX_SCOPE_BREADTH"),
+  velocityWindowMs: envNumber("ANOMALY_VELOCITY_WINDOW_MS"),
+  maxRequestsPerWindow: envNumber("ANOMALY_MAX_REQUESTS_PER_WINDOW"),
+});
 
 const app = express();
 app.use(express.json());
@@ -31,7 +46,7 @@ app.post("/requests", (req, res) => {
     res.status(400).json({ error: "subject (string), scope (string[]), and ttlSeconds (number) are required" });
     return;
   }
-  const pending = requestToken({ subject, scope, ttlSeconds }, requestStore);
+  const pending = requestToken({ subject, scope, ttlSeconds }, requestStore, anomalyDetector, auditLog);
   res.status(201).json(pending);
 });
 

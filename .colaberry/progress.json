@@ -233,21 +233,36 @@
       "criteria": [
         {
           "text": "Given a token request, when it is anomalous, then an alert is triggered.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given a normal request, when it is processed, then no alert is triggered.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust: Anomaly detection actions are logged.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
-      "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "files_touched": [
+        "src/anomalyDetector.ts", "src/anomalyDetector.test.ts", "src/tokenRequest.ts",
+        "src/tokenRequest.test.ts", "src/auditLog.ts", "src/server.ts"
+      ],
+      "tests_added": [
+        "AnomalyDetector > does not flag a single, reasonably-scoped request",
+        "AnomalyDetector > flags a request whose scope is unusually broad",
+        "AnomalyDetector > flags a burst of requests from the same subject within the window",
+        "AnomalyDetector > tracks velocity per subject, not globally",
+        "AnomalyDetector > does not count a request outside the velocity window",
+        "requestToken > does not log an anomaly alert for a normal request",
+        "requestToken > logs an anomaly alert for a request with unusually broad scope",
+        "requestToken > still creates the pending request even when it's flagged as anomalous",
+        "AnomalyDetector > honors a custom maxScopeBreadth instead of the default",
+        "AnomalyDetector > honors a custom maxRequestsPerWindow instead of the default",
+        "AnomalyDetector > falls back to the default for any config field left unset"
+      ],
+      "notes": "Sequenced ahead of STORY-005 per the real dependency graph in plan.json (STORY-005.blocked_by includes STORY-006, not the reverse) — flagged the numbering mismatch to the user before starting rather than building 005 first and hitting the dependency out of order. Nothing in docs/REQUIREMENTS.md or docs/stories/STORY-006.md defines what 'anomalous' means, so picked two real, explainable, testable signals rather than a stub: scope breadth (>3 items in one request) and velocity (>3 requests from the same subject within a 60s window, tracked per-subject so one agent's burst can't flag an unrelated one — this is the concrete guard against the 'false positive alert is triggered' failure path named in the story). Wired into requestToken() itself (STORY-003) so every submission is checked automatically, not an opt-in step a caller could skip; only writes an audit entry when something actually fires, so 'no alert is triggered' for a normal request is literally true (checked as auditLog.entries() having length 0, not just an unasserted default) rather than a logged 'nothing found' entry every time. Detection is a signal only — an anomalous request still goes through the normal STORY-003 consent flow untouched, nothing here auto-denies it. User pushed back on an 85% confidence score being raised without anything actually changing ('i need the confidence score at 90'); rather than relabel the same number, made the underlying gap (thresholds as unconfirmed hardcoded judgment calls) real: AnomalyDetectorConfig is now constructor-injectable with a centralized DEFAULT_ANOMALY_CONFIG, and server.ts reads ANOMALY_MAX_SCOPE_BREADTH/ANOMALY_VELOCITY_WINDOW_MS/ANOMALY_MAX_REQUESTS_PER_WINDOW env vars to override at runtime — a wrong guess is now a config change, not a code change. Verified live, not just unit-tested: started the server with ANOMALY_MAX_SCOPE_BREADTH=1 and confirmed a 2-item request was flagged that wouldn't be under the default.",
+      "updated_at": "2026-08-26T15:09:38Z",
       "verification": null
     },
     {
