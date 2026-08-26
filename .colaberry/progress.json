@@ -58,7 +58,7 @@
       "criteria": [
         {
           "text": "Given a token request, when it is approved, then the token is issued and enforced.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given a revoked token, when it is used, then the action is blocked.",
@@ -66,13 +66,26 @@
         },
         {
           "text": "Trust: Every action is logged in the Audit Log.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
-      "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "files_touched": [
+        "src/token.ts", "src/token.test.ts", "src/auditLog.ts", "src/auditLog.test.ts",
+        "package.json", "tsconfig.json"
+      ],
+      "tests_added": [
+        "issueToken > issues an active token scoped and expiring as requested",
+        "issueToken > refuses to issue a token with an empty scope",
+        "issueToken > refuses to issue a token that would already be expired",
+        "enforceToken > allows an action within scope on an active, unexpired token",
+        "enforceToken > logs every enforcement decision to the audit log",
+        "enforceToken > denies and logs an action outside the token's scope",
+        "enforceToken > denies an action once the token has expired",
+        "AuditLog > returns a fresh array from entries() each call, not a live reference the caller could mutate",
+        "AuditLog > assigns each entry a unique id and the given occurredAt"
+      ],
+      "notes": "Issuance and enforcement both work and are logged (criteria 1 and 3 genuinely true). Criterion 2 (revoked token blocked) is left false on purpose: enforceToken's status!==\"active\" check exists and denies with reasonCode \"revoked\", but Token.status is currently typed as the single literal \"active\" since nothing can revoke a token yet — that's STORY-002. Leaving this honestly false rather than writing a test that fakes revocation by hand.",
+      "updated_at": "2026-08-26T13:46:05Z",
       "verification": null
     },
     {
