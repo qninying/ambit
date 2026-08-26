@@ -2,29 +2,73 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Ambit — Users &amp; Use Case</title>
+<title>Ambit — Users & Use Case</title>
 <link rel="stylesheet" href="assets/command-center.css?v=1" />
 </head>
 <body>
   <header class="cc-header">
     <div class="cc-header-top">
-      <div class="cc-brand">Ambit Command Center<span class="cc-brand-sub" id="cc-project-sub"></span></div>
+      <div class="cc-brand">Ambit Command Center</div>
       <div class="cc-mode-toggle" id="cc-mode-toggle"></div>
     </div>
     <div class="cc-data-as-of" id="cc-data-as-of">Loading…</div>
     <nav class="cc-nav" id="cc-nav"></nav>
   </header>
-  <main>
+  <main id="cc-main">
     <h1 class="cc-page-title">Users &amp; Use Case</h1>
-    <p class="cc-page-desc">Who this is for, and what they're trying to get done.</p>
+    <p class="cc-page-desc">Who this is for, and what they're trying to get done — taken from the "As a &lt;role&gt;" line in each story.</p>
     <div id="cc-content">Loading…</div>
   </main>
   <script src="assets/command-center.js?v=1"></script>
   <script>
-    CommandCenter.init("users", ({ plan }) => {
-      document.getElementById("cc-project-sub").textContent = plan ? " · " + plan.project.name : "";
-      document.getElementById("cc-content").innerHTML = CommandCenter.notBuiltYet("Users &amp; Use Case");
+  (function () {
+    const { esc, getParam } = CommandCenter;
+
+    function storiesForRole(plan, role) {
+      // Roles from plan.derived.roles are lowercase ("approver"), so the vowel
+      // check has to be case-insensitive or "an approver" never matches.
+      return (plan.stories || []).filter((s) => s.narrative && s.narrative.startsWith(`As a${/^[aeiou]/i.test(role) ? "n" : ""} ${role}`));
+    }
+
+    function renderList({ plan }) {
+      const el = document.getElementById("cc-content");
+      const roles = (plan.derived && plan.derived.roles) || [];
+      el.innerHTML = `<div class="cc-grid">` + roles.map((role) => {
+        const stories = storiesForRole(plan, role);
+        return `
+          <a class="cc-card" href="users.html?id=${encodeURIComponent(role)}">
+            <h3>${esc(role)}</h3>
+            <p>${stories.length} ${stories.length === 1 ? "story" : "stories"}</p>
+          </a>
+        `;
+      }).join("") + `</div>`;
+    }
+
+    function renderDetail({ plan }, role) {
+      const el = document.getElementById("cc-content");
+      const stories = storiesForRole(plan, role);
+      el.innerHTML = `
+        <p><a href="users.html">← Users & Use Case</a></p>
+        <div class="cc-panel-box">
+          <h3 style="margin-top:0;">${esc(role)}</h3>
+          ${stories.length === 0
+            ? `<p style="color:var(--cc-muted);">No story currently carries this role's narrative.</p>`
+            : stories.map((s) => `
+                <p style="margin:0 0 12px;">
+                  <strong>${esc(s.id)}</strong> — ${esc(s.title)}<br/>
+                  <span style="color:var(--cc-muted); font-size:13px;">${esc(s.narrative)}</span>
+                </p>
+              `).join("")}
+        </div>
+      `;
+    }
+
+    CommandCenter.init("users", (data) => {
+      const id = getParam("id");
+      if (id) renderDetail(data, id);
+      else renderList(data);
     });
+  })();
   </script>
 </body>
 </html>

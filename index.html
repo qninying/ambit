@@ -30,13 +30,7 @@
     function renderOverview({ plan, progress, dataAsOf, mode }) {
       const el = document.getElementById("cc-overview-content");
       const sub = document.getElementById("cc-project-sub");
-      const banner = document.getElementById("cc-pause-banner");
-
-      banner.innerHTML = `<div class="cc-banner cc-banner-pause">
-        <strong>Build paused for review.</strong> Only the Overview tab is built so far —
-        the other eight are reachable in the nav above and say so honestly. Say
-        <strong>build the rest</strong> to continue.
-      </div>`;
+      // Pause banner removed — all 9 tabs are now built.
 
       if (!plan) {
         el.innerHTML = `<div class="cc-empty-state">.colaberry/plan.json is missing or unreadable — nothing to show yet.</div>`;

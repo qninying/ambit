@@ -8,23 +8,89 @@
 <body>
   <header class="cc-header">
     <div class="cc-header-top">
-      <div class="cc-brand">Ambit Command Center<span class="cc-brand-sub" id="cc-project-sub"></span></div>
+      <div class="cc-brand">Ambit Command Center</div>
       <div class="cc-mode-toggle" id="cc-mode-toggle"></div>
     </div>
     <div class="cc-data-as-of" id="cc-data-as-of">Loading…</div>
     <nav class="cc-nav" id="cc-nav"></nav>
   </header>
-  <main>
+  <main id="cc-main">
     <h1 class="cc-page-title">Guardrails</h1>
-    <p class="cc-page-desc">What must never happen — and whether anything enforces it yet.</p>
+    <p class="cc-page-desc">The promises this system makes — and whether anything in the build currently enforces each one.</p>
     <div id="cc-content">Loading…</div>
   </main>
   <script src="assets/command-center.js?v=1"></script>
   <script>
-    CommandCenter.init("guardrails", ({ plan }) => {
-      document.getElementById("cc-project-sub").textContent = plan ? " · " + plan.project.name : "";
-      document.getElementById("cc-content").innerHTML = CommandCenter.notBuiltYet("Guardrails");
+  (function () {
+    const { esc, getParam, statusDot } = CommandCenter;
+
+    // Sample mode overlay — the real computation (verificationForRequirement)
+    // stays honest; this only substitutes what's DISPLAYED when Sample is active,
+    // so the shape of a finished build is visible without faking real progress data.
+    const SAMPLE_STATES = { "REQ-006": "partial", "REQ-008": "not_enforced", "REQ-012": "enforced", "REQ-015": "enforced" };
+
+    function statusLabel(state) {
+      if (state === "enforced") return "Enforced";
+      if (state === "partial") return "Partially enforced";
+      if (state === "not_enforced") return "Not enforced yet";
+      return "No story fulfils this yet";
+    }
+
+    function renderList({ plan, progress, mode }) {
+      const el = document.getElementById("cc-content");
+      const guardrails = (plan.derived && plan.derived.guardrails) || [];
+      const requirements = plan.requirements || [];
+      const badge = CommandCenter.sampleBadge();
+      if (guardrails.length === 0) {
+        el.innerHTML = `<div class="cc-empty-state">This plan has no SAFE requirement yet, so there is nothing to show here. Worth fixing before building further.</div>`;
+        return;
+      }
+      el.innerHTML = `<div class="cc-grid">` + guardrails.map((g) => {
+        const req = requirements.find((r) => r.id === g.id);
+        const real = CommandCenter.verificationForRequirement(plan, progress, req);
+        const state = mode === "sample" ? (SAMPLE_STATES[g.id] || real.state) : real.state;
+        return `
+          <a class="cc-card" href="guardrails.html?id=${encodeURIComponent(g.id)}">
+            <h3>${statusDot(state)}${esc(g.id)}${badge}</h3>
+            <p>${esc(g.statement)}</p>
+            <p style="margin-top:8px; font-weight:600;">${statusLabel(state)}</p>
+          </a>
+        `;
+      }).join("") + `</div>`;
+    }
+
+    function renderDetail({ plan, progress, mode }, id) {
+      const el = document.getElementById("cc-content");
+      const guardrails = (plan.derived && plan.derived.guardrails) || [];
+      const g = guardrails.find((x) => x.id === id);
+      if (!g) {
+        el.innerHTML = `<div class="cc-empty-state">No guardrail "${esc(id)}" in the plan.</div>`;
+        return;
+      }
+      const req = (plan.requirements || []).find((r) => r.id === g.id);
+      const v = CommandCenter.verificationForRequirement(plan, progress, req);
+      const badge = CommandCenter.sampleBadge();
+      const displayState = mode === "sample" ? (SAMPLE_STATES[g.id] || v.state) : v.state;
+      el.innerHTML = `
+        <p><a href="guardrails.html">← Guardrails</a></p>
+        <div class="cc-panel-box">
+          <p style="margin:0 0 4px; color:var(--cc-muted); font-size:12px; text-transform:uppercase;">${statusDot(displayState)}${esc(g.id)} · ${statusLabel(displayState)}${badge}</p>
+          <p style="margin:0 0 16px; font-size:15px;">${esc(g.statement)}</p>
+          ${v.stories.length === 0
+            ? `<p style="color:var(--cc-muted);">A guardrail whose stories are not verified is a promise made and not yet kept — and this one has no story mapped to it in the plan at all yet, so nothing enforces it.</p>`
+            : `<table class="cc-table"><thead><tr><th>Story</th><th>Title</th><th>State</th></tr></thead><tbody>` +
+              v.stories.map((s) => `<tr><td><a href="project-management.html?id=${encodeURIComponent(s.id)}">${esc(s.id)}</a></td><td>${esc(s.title)}</td><td>${statusDot(s.state)}${esc(s.state)}</td></tr>`).join("") +
+              `</tbody></table>`}
+        </div>
+      `;
+    }
+
+    CommandCenter.init("guardrails", (data) => {
+      const id = getParam("id");
+      if (id) renderDetail(data, id);
+      else renderList(data);
     });
+  })();
   </script>
 </body>
 </html>

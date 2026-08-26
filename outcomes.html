@@ -8,23 +8,65 @@
 <body>
   <header class="cc-header">
     <div class="cc-header-top">
-      <div class="cc-brand">Ambit Command Center<span class="cc-brand-sub" id="cc-project-sub"></span></div>
+      <div class="cc-brand">Ambit Command Center</div>
       <div class="cc-mode-toggle" id="cc-mode-toggle"></div>
     </div>
     <div class="cc-data-as-of" id="cc-data-as-of">Loading…</div>
     <nav class="cc-nav" id="cc-nav"></nav>
   </header>
-  <main>
+  <main id="cc-main">
     <h1 class="cc-page-title">Outcomes</h1>
     <p class="cc-page-desc">The numbers this project has to move.</p>
     <div id="cc-content">Loading…</div>
   </main>
   <script src="assets/command-center.js?v=1"></script>
   <script>
-    CommandCenter.init("outcomes", ({ plan }) => {
-      document.getElementById("cc-project-sub").textContent = plan ? " · " + plan.project.name : "";
-      document.getElementById("cc-content").innerHTML = CommandCenter.notBuiltYet("Outcomes");
+  (function () {
+    const { esc, sampleBadge, getParam } = CommandCenter;
+
+    function renderList({ plan }) {
+      const el = document.getElementById("cc-content");
+      const measures = (plan.derived && plan.derived.measures) || [];
+      if (measures.length === 0) {
+        el.innerHTML = `<div class="cc-empty-state">No outcome measures defined in the plan yet.</div>`;
+        return;
+      }
+      el.innerHTML = `<div class="cc-grid">` + measures.map((m) => `
+        <a class="cc-card" href="outcomes.html?id=${encodeURIComponent(m.id)}">
+          <h3>${esc(m.id)}</h3>
+          <p>${esc(m.statement)}</p>
+        </a>
+      `).join("") + `</div>`;
+    }
+
+    function renderDetail({ plan, mode }, id) {
+      const el = document.getElementById("cc-content");
+      const measure = ((plan.derived && plan.derived.measures) || []).find((m) => m.id === id);
+      if (!measure) {
+        el.innerHTML = `<div class="cc-empty-state">No outcome measure "${esc(id)}" in the plan.</div>`;
+        return;
+      }
+      const badge = sampleBadge();
+      const readout = mode === "sample"
+        ? `<p class="cc-card-value">42% reduction<span style="font-size:13px;font-weight:400;color:var(--cc-muted)"> trending toward the target</span></p>`
+        : `<p class="cc-card-value" style="color:var(--cc-muted)">Not measured yet</p>
+           <p style="color:var(--cc-muted); font-size:13px;">This plan file records the commitment, not the measurement — that number comes from the running system, once it exists.</p>`;
+      el.innerHTML = `
+        <p><a href="outcomes.html">← Outcomes</a></p>
+        <div class="cc-panel-box">
+          <p style="margin:0 0 4px; color: var(--cc-muted); font-size: 12px; text-transform: uppercase;">${esc(measure.id)}${badge}</p>
+          <p style="margin:0 0 16px; font-size: 15px;">${esc(measure.statement)}</p>
+          ${readout}
+        </div>
+      `;
+    }
+
+    CommandCenter.init("outcomes", (data) => {
+      const id = getParam("id");
+      if (id) renderDetail(data, id);
+      else renderList(data);
     });
+  })();
   </script>
 </body>
 </html>

@@ -8,23 +8,100 @@
 <body>
   <header class="cc-header">
     <div class="cc-header-top">
-      <div class="cc-brand">Ambit Command Center<span class="cc-brand-sub" id="cc-project-sub"></span></div>
+      <div class="cc-brand">Ambit Command Center</div>
       <div class="cc-mode-toggle" id="cc-mode-toggle"></div>
     </div>
     <div class="cc-data-as-of" id="cc-data-as-of">Loading…</div>
     <nav class="cc-nav" id="cc-nav"></nav>
   </header>
-  <main>
+  <main id="cc-main">
     <h1 class="cc-page-title">AI Agents</h1>
-    <p class="cc-page-desc">Who owns each story, and the AI agent roster as it's designed.</p>
+    <p class="cc-page-desc">The plan doesn't carry a scoped agent roster yet (plan.agents is empty), so this tab is built from who owns each story — owners, not agents.</p>
     <div id="cc-content">Loading…</div>
   </main>
   <script src="assets/command-center.js?v=1"></script>
   <script>
-    CommandCenter.init("agents", ({ plan }) => {
-      document.getElementById("cc-project-sub").textContent = plan ? " · " + plan.project.name : "";
-      document.getElementById("cc-content").innerHTML = CommandCenter.notBuiltYet("AI Agents");
+  (function () {
+    const { esc, getParam } = CommandCenter;
+
+    // Sample overlay only. Real mode always says "no skills registered yet" /
+    // "no runs recorded" — never a fabricated success rate, per the brief.
+    const SAMPLE_SKILLS = {
+      "Security Officer": ["anomaly-triage", "revocation-response"],
+      "Developer": ["sdk-integration-test"],
+    };
+
+    // plan.agents is empty for this build and plan.derived carries no "owners"
+    // field either — so owners are grouped here from stories[].owner_agent, the
+    // one field the plan actually has, rather than guessing at a shape.
+    function ownersFromStories(plan) {
+      const byName = new Map();
+      (plan.stories || []).forEach((s) => {
+        const name = s.owner_agent;
+        if (!name) return;
+        if (!byName.has(name)) byName.set(name, []);
+        byName.get(name).push(s.id);
+      });
+      return Array.from(byName, ([name, owns]) => ({ name, owns }));
+    }
+
+    function renderList({ plan, mode }) {
+      const el = document.getElementById("cc-content");
+      const owners = ownersFromStories(plan);
+      const badge = CommandCenter.sampleBadge();
+      el.innerHTML = `
+        <div class="cc-banner">These are story owners, not scoped AI agents — the plan has no agent roster to show yet.</div>
+        <div class="cc-grid">` + owners.map((o) => {
+          const skills = mode === "sample" ? (SAMPLE_SKILLS[o.name] || []) : [];
+          const skillsText = skills.length ? skills.join(", ") : "no skills registered yet";
+          return `
+          <a class="cc-card" href="agents.html?id=${encodeURIComponent(o.name)}">
+            <h3>${esc(o.name)}${badge}</h3>
+            <p>Owns ${o.owns.length} ${o.owns.length === 1 ? "story" : "stories"}: ${o.owns.map(esc).join(", ")}</p>
+            <p style="margin-top:8px; color: var(--cc-muted);">${esc(skillsText)}</p>
+          </a>
+        `;
+        }).join("") + `</div>`;
+    }
+
+    function renderDetail({ plan, progress, mode }, id) {
+      const el = document.getElementById("cc-content");
+      const owners = ownersFromStories(plan);
+      const owner = owners.find((o) => o.name === id);
+      if (!owner) {
+        el.innerHTML = `<div class="cc-empty-state">No owner "${esc(id)}" in the plan.</div>`;
+        return;
+      }
+      const badge = CommandCenter.sampleBadge();
+      const skills = mode === "sample" ? (SAMPLE_SKILLS[owner.name] || []) : [];
+      const skillsText = skills.length ? skills.join(", ") : "no skills registered yet";
+      const runsText = mode === "sample" && skills.length ? "6 runs recorded, last 40 minutes ago" : "no runs recorded";
+      const stories = owner.owns.map((sid) => (plan.stories || []).find((s) => s.id === sid)).filter(Boolean);
+      el.innerHTML = `
+        <p><a href="agents.html">← AI Agents</a></p>
+        <div class="cc-panel-box">
+          <h3 style="margin-top:0;">${esc(owner.name)}${badge}</h3>
+          <p style="color:var(--cc-muted); font-size:13px;">Owner, not a scoped AI agent. Skills: ${esc(skillsText)}. Runs: ${esc(runsText)}.</p>
+          <table class="cc-table">
+            <thead><tr><th>Story</th><th>Title</th><th>Status</th></tr></thead>
+            <tbody>
+              ${stories.map((s) => {
+                const state = ((progress && progress.stories) || []).find((p) => p.id === s.id);
+                const stateText = state && state.verification ? state.verification.state : "not_started";
+                return `<tr><td><a href="project-management.html?id=${encodeURIComponent(s.id)}">${esc(s.id)}</a></td><td>${esc(s.title)}</td><td>${CommandCenter.statusDot(stateText)}${esc(stateText)}</td></tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    CommandCenter.init("agents", (data) => {
+      const id = getParam("id");
+      if (id) renderDetail(data, id);
+      else renderList(data);
     });
+  })();
   </script>
 </body>
 </html>

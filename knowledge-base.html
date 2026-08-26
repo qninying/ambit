@@ -4,27 +4,117 @@
 <meta charset="utf-8" />
 <title>Ambit — Knowledge Base</title>
 <link rel="stylesheet" href="assets/command-center.css?v=1" />
+<style>
+  .cc-chat-input { display: flex; gap: 8px; margin-bottom: 16px; }
+  .cc-chat-input input { flex: 1; padding: 10px 12px; border: 1px solid var(--cc-border); border-radius: 8px; font-size: 13px; }
+  .cc-chat-input button { padding: 10px 16px; border: none; border-radius: 8px; background: var(--cc-accent); color: white; font-weight: 600; cursor: pointer; font-size: 13px; }
+  .cc-chat-answer { background: var(--cc-panel); border: 1px solid var(--cc-border); border-radius: var(--cc-radius); padding: 16px; }
+  .cc-chat-hit { border-bottom: 1px solid var(--cc-border); padding: 8px 0; font-size: 13px; }
+  .cc-chat-hit:last-child { border-bottom: none; }
+</style>
 </head>
 <body>
   <header class="cc-header">
     <div class="cc-header-top">
-      <div class="cc-brand">Ambit Command Center<span class="cc-brand-sub" id="cc-project-sub"></span></div>
+      <div class="cc-brand">Ambit Command Center</div>
       <div class="cc-mode-toggle" id="cc-mode-toggle"></div>
     </div>
     <div class="cc-data-as-of" id="cc-data-as-of">Loading…</div>
     <nav class="cc-nav" id="cc-nav"></nav>
   </header>
-  <main>
+  <main id="cc-main">
     <h1 class="cc-page-title">Knowledge Base</h1>
-    <p class="cc-page-desc">Everything this project knows about itself — requirements, stories, traceability.</p>
+    <p class="cc-page-desc">Everything the project knows about itself — requirements, stories, and a search panel over this page's own data.</p>
     <div id="cc-content">Loading…</div>
   </main>
   <script src="assets/command-center.js?v=1"></script>
   <script>
-    CommandCenter.init("knowledge-base", ({ plan }) => {
-      document.getElementById("cc-project-sub").textContent = plan ? " · " + plan.project.name : "";
-      document.getElementById("cc-content").innerHTML = CommandCenter.notBuiltYet("Knowledge Base");
+  (function () {
+    const { esc } = CommandCenter;
+    let PLAN, PROGRESS;
+
+    function searchData(query) {
+      const q = query.toLowerCase().trim();
+      if (!q) return [];
+      const hits = [];
+      (PLAN.requirements || []).forEach((r) => {
+        if (r.id.toLowerCase().includes(q) || r.statement.toLowerCase().includes(q)) {
+          hits.push({ tab: "Knowledge Base", label: `${r.id} — ${r.statement}`, href: `knowledge-base.html#${r.id}` });
+        }
+      });
+      (PLAN.stories || []).forEach((s) => {
+        if (s.id.toLowerCase().includes(q) || s.title.toLowerCase().includes(q) || (s.narrative || "").toLowerCase().includes(q)) {
+          hits.push({ tab: "Project Management", label: `${s.id} — ${s.title}`, href: `project-management.html?id=${encodeURIComponent(s.id)}` });
+        }
+      });
+      ((PLAN.derived && PLAN.derived.guardrails) || []).forEach((g) => {
+        if (g.statement.toLowerCase().includes(q) || g.id.toLowerCase().includes(q)) {
+          hits.push({ tab: "Guardrails", label: `${g.id} — ${g.statement}`, href: `guardrails.html?id=${encodeURIComponent(g.id)}` });
+        }
+      });
+      ((PLAN.derived && PLAN.derived.systems) || []).forEach((sys) => {
+        if (sys.toLowerCase().includes(q)) {
+          hits.push({ tab: "Systems", label: sys, href: `systems.html?id=${encodeURIComponent(sys)}` });
+        }
+      });
+      return hits;
+    }
+
+    function ask() {
+      const input = document.getElementById("cc-chat-q");
+      const answerEl = document.getElementById("cc-chat-answer");
+      const hits = searchData(input.value);
+      if (hits.length === 0) {
+        answerEl.innerHTML = `<div class="cc-chat-answer">I can't answer that from the data on this page — try a term from a requirement, story, guardrail, or system name.</div>`;
+        return;
+      }
+      answerEl.innerHTML = `<div class="cc-chat-answer">` +
+        hits.map((h) => `<div class="cc-chat-hit"><a href="${h.href}">${esc(h.label)}</a><br/><span style="color:var(--cc-muted); font-size:11px;">from ${esc(h.tab)}</span></div>`).join("") +
+        `</div>`;
+    }
+
+    function renderTraceability() {
+      const el = document.getElementById("cc-content");
+      const rows = (PLAN.requirements || []).map((r) => {
+        const v = CommandCenter.verificationForRequirement(PLAN, PROGRESS, r);
+        const gap = r.priority === "must" && (r.fulfilled_by || []).length === 0;
+        return `
+          <tr${gap ? ' style="background: var(--cc-warn-bg);"' : ""}>
+            <td>${esc(r.id)}</td>
+            <td>${esc(r.statement)}</td>
+            <td><span class="cc-tag cc-tag-${r.priority}">${esc(r.priority)}</span></td>
+            <td>${(r.fulfilled_by || []).join(", ") || (gap ? "None — gap" : "—")}</td>
+            <td>${CommandCenter.statusDot(v.state)}${esc(v.state)}</td>
+          </tr>
+        `;
+      }).join("");
+
+      el.innerHTML = `
+        <div class="cc-panel-box">
+          <h3 style="margin-top:0;">Ask the knowledge base</h3>
+          <div class="cc-chat-input">
+            <input id="cc-chat-q" type="text" placeholder="e.g. token, revocation, delegation…" />
+            <button id="cc-chat-ask">Ask</button>
+          </div>
+          <div id="cc-chat-answer"></div>
+        </div>
+        <div class="cc-panel-box">
+          <h3 style="margin-top:0;">Requirements traceability</h3>
+          <table class="cc-table">
+            <thead><tr><th>ID</th><th>Statement</th><th>Priority</th><th>Fulfilled by</th><th>Status</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+      document.getElementById("cc-chat-ask").addEventListener("click", ask);
+      document.getElementById("cc-chat-q").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
+    }
+
+    CommandCenter.init("knowledge-base", ({ plan, progress }) => {
+      PLAN = plan; PROGRESS = progress;
+      renderTraceability();
     });
+  })();
   </script>
 </body>
 </html>

@@ -8,23 +8,74 @@
 <body>
   <header class="cc-header">
     <div class="cc-header-top">
-      <div class="cc-brand">Ambit Command Center<span class="cc-brand-sub" id="cc-project-sub"></span></div>
+      <div class="cc-brand">Ambit Command Center</div>
       <div class="cc-mode-toggle" id="cc-mode-toggle"></div>
     </div>
     <div class="cc-data-as-of" id="cc-data-as-of">Loading…</div>
     <nav class="cc-nav" id="cc-nav"></nav>
   </header>
-  <main>
+  <main id="cc-main">
     <h1 class="cc-page-title">Data Model</h1>
-    <p class="cc-page-desc">The tables behind Ambit, with fields and relationships.</p>
+    <p class="cc-page-desc">A starting point, not the answer — derived from what Ambit's own requirements say has to be stored, named for this domain rather than any vendor.</p>
     <div id="cc-content">Loading…</div>
   </main>
   <script src="assets/command-center.js?v=1"></script>
   <script>
-    CommandCenter.init("data-model", ({ plan }) => {
-      document.getElementById("cc-project-sub").textContent = plan ? " · " + plan.project.name : "";
-      document.getElementById("cc-content").innerHTML = CommandCenter.notBuiltYet("Data Model");
+  (function () {
+    const { esc, getParam } = CommandCenter;
+
+    const ENTITIES = [
+      { name: "Requirement", from: "REQ-*", fields: ["id", "statement", "kind (FUNC/SAFE/CONSTRAINT)", "priority (must/should)", "cluster"], relates: "fulfilled by many Story" },
+      { name: "Story", from: "STORY-*", fields: ["id", "title", "narrative", "release_key", "owner_agent", "due_on", "due_baseline_on"], relates: "fulfils many Requirement; has many AcceptanceCriterion; has one VerificationRecord" },
+      { name: "Release", from: "plan.releases", fields: ["key", "name", "starts_on", "ends_on", "is_demo_target"], relates: "has many Story" },
+      { name: "AcceptanceCriterion", from: "Done means / progress.stories[].criteria", fields: ["story_id", "text", "passed"], relates: "belongs to one Story" },
+      { name: "VerificationRecord", from: "progress.stories[].verification", fields: ["story_id", "state", "commit_sha", "verified_at"], relates: "belongs to one Story" },
+      { name: "Token", from: "REQ-001, REQ-004, REQ-015", fields: ["id", "subject_agent_id", "scope[]", "issued_at", "expires_at", "status (active/revoked/expired)", "parent_token_id (nullable)"], relates: "may have one parent Token; has many EnforcementDecision" },
+      { name: "TokenRequest", from: "REQ-001, REQ-002, REQ-013", fields: ["id", "requested_by", "requested_scope[]", "status (pending/approved/denied)", "created_at"], relates: "has one ApprovalDecision; produces at most one Token" },
+      { name: "ApprovalDecision", from: "REQ-002, REQ-013", fields: ["token_request_id", "approver", "decision", "plain_language_summary", "decided_at"], relates: "belongs to one TokenRequest" },
+      { name: "Delegation", from: "REQ-003, REQ-012", fields: ["parent_token_id", "requested_scope[]", "granted_scope[]", "denied (bool)", "occurred_at"], relates: "belongs to one parent Token; produces at most one child Token" },
+      { name: "Policy", from: "REQ-011, REQ-017", fields: ["id", "name", "scope_constraints", "authored_by", "approved_by", "version"], relates: "constrains many Token" },
+      { name: "EnforcementDecision", from: "REQ-004, REQ-005, REQ-006, REQ-010, REQ-018", fields: ["id", "token_id", "action", "target_system", "decision (allow/deny)", "reason_code", "occurred_at"], relates: "belongs to one Token; appears in the immutable Audit Log" },
+      { name: "AnomalyAlert", from: "REQ-016", fields: ["id", "token_request_id", "signal", "triggered_at", "status"], relates: "belongs to one TokenRequest" },
+      { name: "CircuitBreakerState", from: "REQ-008", fields: ["id", "store_reachable (bool)", "state (closed/open)", "changed_at"], relates: "governs whether new EnforcementDecision rows can be made" },
+      { name: "RedactionRule", from: "REQ-009", fields: ["field_name", "applies_to_entity", "redaction_type"], relates: "applied when an EnforcementDecision allows customer-data access" },
+    ];
+
+    function renderList() {
+      const el = document.getElementById("cc-content");
+      el.innerHTML = `<div class="cc-grid">` + ENTITIES.map((e) => `
+        <a class="cc-card" href="data-model.html?id=${encodeURIComponent(e.name)}">
+          <h3>${esc(e.name)}</h3>
+          <p>${esc(e.from)}</p>
+        </a>
+      `).join("") + `</div>`;
+    }
+
+    function renderDetail(id) {
+      const el = document.getElementById("cc-content");
+      const e = ENTITIES.find((x) => x.name === id);
+      if (!e) {
+        el.innerHTML = `<div class="cc-empty-state">No entity "${esc(id)}" in this model.</div>`;
+        return;
+      }
+      el.innerHTML = `
+        <p><a href="data-model.html">← Data Model</a></p>
+        <div class="cc-panel-box">
+          <h3 style="margin-top:0;">${esc(e.name)}</h3>
+          <p style="color:var(--cc-muted); font-size:13px;">Derived from: ${esc(e.from)}</p>
+          <p style="font-size:13px;"><strong>Fields:</strong></p>
+          <ul>${e.fields.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
+          <p style="font-size:13px;"><strong>Relationships:</strong> ${esc(e.relates)}</p>
+        </div>
+      `;
+    }
+
+    CommandCenter.init("data-model", () => {
+      const id = getParam("id");
+      if (id) renderDetail(id);
+      else renderList();
     });
+  })();
   </script>
 </body>
 </html>

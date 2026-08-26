@@ -19,29 +19,36 @@
       "criteria": [
         {
           "text": "Given the Command Center, when it is opened, then every tab is reachable and every card drills down one level.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given sample mode, when any tab is shown, then the sample data is visibly labelled as sample.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given the Command Center, when any tab renders, then .colaberry/plan.json and .colaberry/progress.json are both committed in this repo and every tab reads its content from them at runtime rather than from hard-coded values.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given the Command Center, when any tab is shown, then .colaberry/manifest.json is committed in this repo and every tab shows how old that data is and warns when the age exceeds a week.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust — no tab shows a number, a connection or a result the project has not actually produced.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
+      "files_touched": [
+        "index.html", "outcomes.html", "users.html", "guardrails.html",
+        "systems.html", "project-management.html", "agents.html",
+        "knowledge-base.html", "data-model.html",
+        "assets/command-center.js", "assets/command-center.css",
+        ".colaberry/plan.json", ".colaberry/progress.json",
+        ".colaberry/manifest.json", ".colaberry/profile.json"
+      ],
       "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "notes": "All 9 tabs built and reachable; every list view's cards drill down to a detail page (Outcomes uses the brief's sanctioned no-measures empty state instead, since plan.derived.measures is empty). Verified in-browser over a local static server (fetch needs http://, not file://): zero console errors across all 9 pages and their drill-downs, Sample mode shows plausible labelled data on every tab, Real mode shows the honest current state (0/13 stories, 0/41 criteria, grey \"not checked from here\" on Systems, \"not enforced yet\" on all 4 Guardrails, \"no runs recorded\"/\"no skills registered yet\" on AI Agents). Found and fixed one real bug during verification: the Users & Use Case role-matching regex only recognized an uppercase vowel, so lowercase role names like \"approver\" (from plan.derived.roles) fell through to \"As a approver\" and matched 0 stories instead of 1 — fixed to a case-insensitive test.",
+      "updated_at": "2026-08-26T02:25:38Z",
       "verification": null
     },
     {

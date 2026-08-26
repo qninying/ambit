@@ -4,27 +4,174 @@
 <meta charset="utf-8" />
 <title>Ambit — Project Management</title>
 <link rel="stylesheet" href="assets/command-center.css?v=1" />
+<style>
+  .cc-gantt-row { display: flex; align-items: center; margin-bottom: 10px; font-size: 12px; }
+  .cc-gantt-label { width: 220px; flex-shrink: 0; color: var(--cc-muted); }
+  .cc-gantt-track { flex: 1; background: var(--cc-border); border-radius: 4px; height: 20px; position: relative; }
+  .cc-gantt-bar { position: absolute; top: 0; height: 100%; border-radius: 4px; background: var(--cc-accent); }
+  .cc-gantt-bar.cc-gantt-demo { background: var(--cc-warn); }
+</style>
 </head>
 <body>
   <header class="cc-header">
     <div class="cc-header-top">
-      <div class="cc-brand">Ambit Command Center<span class="cc-brand-sub" id="cc-project-sub"></span></div>
+      <div class="cc-brand">Ambit Command Center</div>
       <div class="cc-mode-toggle" id="cc-mode-toggle"></div>
     </div>
     <div class="cc-data-as-of" id="cc-data-as-of">Loading…</div>
     <nav class="cc-nav" id="cc-nav"></nav>
   </header>
-  <main>
+  <main id="cc-main">
     <h1 class="cc-page-title">Project Management</h1>
-    <p class="cc-page-desc">Releases, due dates, and story status.</p>
+    <p class="cc-page-desc">Releases and per-story status, straight from the plan and progress files.</p>
     <div id="cc-content">Loading…</div>
   </main>
   <script src="assets/command-center.js?v=1"></script>
   <script>
-    CommandCenter.init("project-management", ({ plan }) => {
-      document.getElementById("cc-project-sub").textContent = plan ? " · " + plan.project.name : "";
-      document.getElementById("cc-content").innerHTML = CommandCenter.notBuiltYet("Project Management");
+  (function () {
+    const { esc, getParam, formatDateOrUnset } = CommandCenter;
+
+    function storyState(progress, id) {
+      const s = (progress && progress.stories || []).find((x) => x.id === id);
+      return s && s.verification ? s.verification.state : "not_started";
+    }
+
+    // Sample overlay only, chosen to match Overview's sample "4 of 12 verified"
+    // headline so the tabs tell a consistent story. Real mode is untouched.
+    const SAMPLE_STORY_STATES = {
+      "STORY-001": "verified", "STORY-002": "verified", "STORY-003": "verified",
+      "STORY-004": "verified", "STORY-005": "in_progress",
+    };
+
+    function displayStoryState(progress, id, mode) {
+      if (mode === "sample") return SAMPLE_STORY_STATES[id] || "not_started";
+      return storyState(progress, id);
+    }
+
+    function pct(dateStr, start, end) {
+      if (!dateStr || !start || !end) return 0;
+      const d = new Date(dateStr).getTime();
+      const s = new Date(start).getTime();
+      const e = new Date(end).getTime();
+      if (s === e) return 0;
+      return Math.max(0, Math.min(100, ((d - s) / (e - s)) * 100));
+    }
+
+    // Renders a real Gantt bar only once build_start/build_end/demo_day are all
+    // set — plan.schedule is null until the platform (or the student) sets build
+    // dates, and rendering percentages off missing dates would show a fake timeline.
+    function renderGantt(plan) {
+      const schedule = plan.schedule;
+      if (!schedule || !schedule.build_start || !schedule.build_end) {
+        return `
+          <div class="cc-panel-box">
+            <h3 style="margin-top:0;">Releases</h3>
+            <p style="color:var(--cc-muted); font-size:13px; margin:0 0 10px;">
+              Not scheduled yet — the plan has no build window, so there's no timeline to draw. Releases, in order:
+            </p>
+            ${plan.releases.map((r) => `
+              <div class="cc-gantt-row">
+                <div class="cc-gantt-label">${esc(r.key.toUpperCase())} · ${esc(r.name)}</div>
+                <div style="color:var(--cc-muted);">${r.story_ids.length} ${r.story_ids.length === 1 ? "story" : "stories"} · ${formatDateOrUnset(r.starts_on)} → ${formatDateOrUnset(r.ends_on)}</div>
+              </div>
+            `).join("")}
+          </div>
+        `;
+      }
+      const { build_start, build_end, demo_day } = schedule;
+      const rows = plan.releases.map((r) => {
+        const left = pct(r.starts_on, build_start, build_end);
+        const right = pct(r.ends_on, build_start, build_end);
+        const width = Math.max(1, right - left);
+        return `
+          <div class="cc-gantt-row">
+            <div class="cc-gantt-label">${esc(r.key.toUpperCase())} · ${esc(r.name)}</div>
+            <div class="cc-gantt-track">
+              <div class="cc-gantt-bar${r.is_demo_target ? " cc-gantt-demo" : ""}" style="left:${left}%; width:${width}%;"></div>
+            </div>
+          </div>
+        `;
+      }).join("");
+      const demoRow = demo_day ? `
+          <div class="cc-gantt-row">
+            <div class="cc-gantt-label" style="font-weight:600;">Demo day</div>
+            <div class="cc-gantt-track">
+              <div class="cc-gantt-bar cc-gantt-demo" style="left:${pct(demo_day, build_start, build_end)}%; width:2%;"></div>
+            </div>
+          </div>` : "";
+      return `
+        <div class="cc-panel-box">
+          <h3 style="margin-top:0;">Releases</h3>
+          ${rows}${demoRow}
+          <p style="color:var(--cc-muted); font-size:12px; margin-top:12px;">
+            Build ${formatDateOrUnset(build_start)} → ${formatDateOrUnset(build_end)}${demo_day ? ` · Demo ${formatDateOrUnset(demo_day)}` : ""}${schedule.demo_release_key ? ` (release ${esc(schedule.demo_release_key.toUpperCase())})` : ""}
+          </p>
+        </div>
+      `;
+    }
+
+    function renderList({ plan, progress, mode }) {
+      const el = document.getElementById("cc-content");
+      const badge = CommandCenter.sampleBadge();
+      const rows = (plan.stories || []).map((s) => {
+        const state = displayStoryState(progress, s.id, mode);
+        const slipped = s.due_on && s.due_baseline_on && s.due_on !== s.due_baseline_on;
+        return `
+          <tr>
+            <td><a href="project-management.html?id=${encodeURIComponent(s.id)}">${esc(s.id)}</a></td>
+            <td>${esc(s.title)}</td>
+            <td>${esc(s.release.toUpperCase())}</td>
+            <td>${formatDateOrUnset(s.due_baseline_on)}</td>
+            <td>${formatDateOrUnset(s.due_on)}${slipped ? ' <span class="cc-tag cc-tag-should">slipped</span>' : ""}</td>
+            <td>${CommandCenter.statusDot(state)}${esc(state)}</td>
+          </tr>
+        `;
+      }).join("");
+      el.innerHTML = renderGantt(plan) + `
+        <div class="cc-panel-box">
+          <h3 style="margin-top:0;">Stories${badge}</h3>
+          <table class="cc-table">
+            <thead><tr><th>ID</th><th>Title</th><th>Release</th><th>Due (baseline)</th><th>Due (current)</th><th>Status</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderDetail({ plan, progress, mode }, id) {
+      const el = document.getElementById("cc-content");
+      const s = (plan.stories || []).find((x) => x.id === id);
+      if (!s) {
+        el.innerHTML = `<div class="cc-empty-state">No story "${esc(id)}" in the plan.</div>`;
+        return;
+      }
+      const state = displayStoryState(progress, s.id, mode);
+      const badge = CommandCenter.sampleBadge();
+      const progressStory = (progress && progress.stories || []).find((x) => x.id === s.id);
+      el.innerHTML = `
+        <p><a href="project-management.html">← Project Management</a></p>
+        <div class="cc-panel-box">
+          <p style="margin:0 0 4px; color:var(--cc-muted); font-size:12px; text-transform:uppercase;">${esc(s.id)} · ${esc(s.release.toUpperCase())}${badge}</p>
+          <h3 style="margin:0 0 10px;">${esc(s.title)}</h3>
+          <p style="color:var(--cc-muted); font-size:13px;">${esc(s.narrative)}</p>
+          <p>${CommandCenter.statusDot(state)}<strong>${esc(state)}</strong></p>
+          <p style="font-size:13px;">Due: ${formatDateOrUnset(s.due_on)} (baseline: ${formatDateOrUnset(s.due_baseline_on)})</p>
+          ${s.acceptance && s.acceptance.length
+            ? `<p style="font-size:13px;"><strong>Acceptance criteria:</strong></p><ul>${s.acceptance.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>`
+            : `<p style="color:var(--cc-muted); font-size:13px;">No acceptance criteria recorded yet for this story.</p>`}
+          ${progressStory && progressStory.criteria
+            ? `<p style="font-size:13px;"><strong>Criteria confirmed:</strong></p><ul>${progressStory.criteria.map((c) => `<li>${c.passed ? "✅" : "⬜"} ${esc(c.text)}</li>`).join("")}</ul>`
+            : ""}
+        </div>
+      `;
+    }
+
+    CommandCenter.init("project-management", (data) => {
+      const id = getParam("id");
+      if (id) renderDetail(data, id);
+      else renderList(data);
     });
+  })();
   </script>
 </body>
 </html>
