@@ -13,6 +13,8 @@ import { delegateToken } from "./delegation.js";
 import { RequestNotPendingError, UnknownRequestError, approveRequest, denyRequest, requestToken } from "./tokenRequest.js";
 import { RequestStore } from "./requestStore.js";
 import { TokenStore } from "./tokenStore.js";
+import { MockEndpointRegistry, type MockSystem } from "./mockEndpoints.js";
+import { accessMockEndpoint } from "./mockEndpointAccess.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +35,13 @@ const anomalyDetector = new AnomalyDetector({
   velocityWindowMs: envNumber("ANOMALY_VELOCITY_WINDOW_MS"),
   maxRequestsPerWindow: envNumber("ANOMALY_MAX_REQUESTS_PER_WINDOW"),
 });
+const mockEndpoints = new MockEndpointRegistry();
+// Same "not hardcoded" treatment via ACCESS_TIMEOUT_MS / ACCESS_MAX_ATTEMPTS / ACCESS_RETRY_DELAY_MS.
+const accessConfig = {
+  timeoutMs: envNumber("ACCESS_TIMEOUT_MS"),
+  maxAttempts: envNumber("ACCESS_MAX_ATTEMPTS"),
+  retryDelayMs: envNumber("ACCESS_RETRY_DELAY_MS"),
+};
 
 const app = express();
 app.use(express.json());
@@ -139,6 +148,35 @@ app.post("/tokens/:id/delegate", (req, res) => {
   }
   const decision = delegateToken(req.params.id, subject, scope, ttlSeconds, tokenStore, auditLog);
   res.status(200).json(decision);
+});
+
+// REQ-006/REQ-007: reach a mock endpoint only through the Enforcement
+// Gateway. Returns 200 with allowed:false on denial, same treatment as
+// /enforce and /delegate — a refused access attempt is a normal outcome.
+const MOCK_SYSTEMS: MockSystem[] = ["email", "code-hosting", "payment", "crm"];
+app.post("/tokens/:id/access", async (req, res) => {
+  const { system, verb } = req.body ?? {};
+  if (!MOCK_SYSTEMS.includes(system) || typeof verb !== "string") {
+    res.status(400).json({ error: `system must be one of: ${MOCK_SYSTEMS.join(", ")}; verb (string) is required` });
+    return;
+  }
+  const result = await accessMockEndpoint(req.params.id, system, verb, tokenStore, auditLog, mockEndpoints, accessConfig);
+  res.status(200).json(result);
+});
+
+// Demo/ops convenience: put a mock system into a known-down state so the
+// "endpoint is unreachable" path can actually be shown, not just asserted
+// in a test. Deliberately not gated behind auth — this only touches the
+// in-memory mock registry, never a real system.
+app.post("/mock-endpoints/:system/down", (req, res) => {
+  const system = req.params.system as MockSystem;
+  if (!MOCK_SYSTEMS.includes(system)) {
+    res.status(400).json({ error: `system must be one of: ${MOCK_SYSTEMS.join(", ")}` });
+    return;
+  }
+  const down = req.body?.down !== false; // default true — POSTing with no body means "take it down"
+  mockEndpoints.setDown(system, down);
+  res.status(200).json({ system, down });
 });
 
 app.get("/audit-log", (_req, res) => {

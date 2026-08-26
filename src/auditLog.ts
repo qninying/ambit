@@ -19,6 +19,11 @@ export interface AuditLogEntry {
   // Who performed a human-driven action (an approver), as opposed to
   // `subject`, which is the AI agent the token is for.
   actor?: string;
+  // What actually happened downstream, for a mock-endpoint access — distinct
+  // from `decision`, which only says whether the Enforcement Gateway allowed
+  // the attempt. A gateway can allow an action that then fails to reach its
+  // target; those are two different facts, logged as two entries.
+  outcome?: "success" | "unreachable";
 }
 
 export class AuditLog {
