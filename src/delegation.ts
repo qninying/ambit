@@ -5,15 +5,24 @@
 // revocation respectively.
 
 import type { AuditLog } from "./auditLog.js";
+import { CircuitOpenError } from "./circuitBreaker.js";
 import { issueToken, type Token } from "./token.js";
 import type { TokenStore } from "./tokenStore.js";
 
-export type DelegationDenialReason = "parent_invalid" | "empty_scope" | "exceeds_parent_scope" | "not_narrower";
+export type DelegationDenialReason =
+  | "parent_invalid"
+  | "empty_scope"
+  | "exceeds_parent_scope"
+  | "not_narrower"
+  | "store_unavailable";
 
 export type DelegationDecision =
   | { approved: true; token: Token }
   | { approved: false; reasonCode: DelegationDenialReason };
 
+// Never throws — same "always a decision" contract as enforceToken, so a
+// store outage (REQ-008) is a denial reason like any other, not an
+// exception a caller has to separately handle.
 export function delegateToken(
   parentTokenId: string,
   childSubject: string,
@@ -23,7 +32,15 @@ export function delegateToken(
   auditLog: AuditLog,
   now: Date = new Date(),
 ): DelegationDecision {
-  const parent = tokenStore.get(parentTokenId);
+  let parent;
+  try {
+    parent = tokenStore.get(parentTokenId);
+  } catch (err) {
+    if (err instanceof CircuitOpenError) {
+      return deny(parentTokenId, childSubject, "store_unavailable", auditLog, now);
+    }
+    throw err;
+  }
   const parentValid = !!parent && parent.status === "active" && now.getTime() < parent.expiresAt.getTime();
   if (!parent || !parentValid) {
     return deny(parentTokenId, childSubject, "parent_invalid", auditLog, now);
@@ -45,7 +62,15 @@ export function delegateToken(
     return deny(parentTokenId, childSubject, "not_narrower", auditLog, now);
   }
 
-  const token = issueToken({ subject: childSubject, scope: requestedScope, ttlSeconds, parentTokenId }, tokenStore);
+  let token: Token;
+  try {
+    token = issueToken({ subject: childSubject, scope: requestedScope, ttlSeconds, parentTokenId }, tokenStore);
+  } catch (err) {
+    if (err instanceof CircuitOpenError) {
+      return deny(parentTokenId, childSubject, "store_unavailable", auditLog, now);
+    }
+    throw err;
+  }
   auditLog.record({
     tokenId: token.id,
     subject: childSubject,

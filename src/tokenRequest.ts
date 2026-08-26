@@ -5,6 +5,7 @@
 
 import type { AnomalyDetector } from "./anomalyDetector.js";
 import type { AuditLog } from "./auditLog.js";
+import { CircuitOpenError } from "./circuitBreaker.js";
 import { InvalidScopeError, PolicyViolationError, issueToken, type Token, type TokenRequest } from "./token.js";
 import type { TokenStore } from "./tokenStore.js";
 import type { RequestStore } from "./requestStore.js";
@@ -117,12 +118,13 @@ export function approveRequest(
       policyStore,
     );
   } catch (err) {
-    // An approval attempt that a policy blocks is still a real event — an
-    // administrator investigating "why wasn't this approved" needs to find
-    // it here, not discover the audit log has nothing to say about it. The
-    // request stays pending (not consumed), so a second, in-policy attempt
-    // is still possible.
-    if (err instanceof PolicyViolationError || err instanceof InvalidScopeError) {
+    // An approval attempt that a policy blocks — or that a store outage
+    // (REQ-008) interrupts — is still a real event — an administrator
+    // investigating "why wasn't this approved" needs to find it here, not
+    // discover the audit log has nothing to say about it. The request stays
+    // pending (not consumed), so a second attempt, once in-policy or once
+    // the store recovers, is still possible.
+    if (err instanceof PolicyViolationError || err instanceof InvalidScopeError || err instanceof CircuitOpenError) {
       auditLog.record({
         requestId,
         subject: pending.subject,

@@ -4,6 +4,7 @@
 // what future issuance under it allows, not just what's stored.
 
 import type { AuditLog } from "./auditLog.js";
+import type { CircuitBreaker } from "./circuitBreaker.js";
 
 export interface Policy {
   id: string;
@@ -37,17 +38,27 @@ export class UnknownPolicyError extends Error {
 
 export class PolicyStore {
   #policies = new Map<string, Policy>();
+  #breaker?: CircuitBreaker;
+
+  // Same optional-breaker shape as TokenStore — see that file's comment.
+  constructor(breaker?: CircuitBreaker) {
+    this.#breaker = breaker;
+  }
 
   save(policy: Policy): void {
-    this.#policies.set(policy.id, policy);
+    this.#guarded(() => this.#policies.set(policy.id, policy));
   }
 
   get(id: string): Policy | undefined {
-    return this.#policies.get(id);
+    return this.#guarded(() => this.#policies.get(id));
   }
 
   list(): Policy[] {
     return [...this.#policies.values()];
+  }
+
+  #guarded<T>(fn: () => T): T {
+    return this.#breaker ? this.#breaker.execute(fn) : fn();
   }
 }
 

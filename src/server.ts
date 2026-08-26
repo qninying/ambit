@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { AnomalyDetector } from "./anomalyDetector.js";
 import { AuditLog } from "./auditLog.js";
+import { CircuitOpenError, CircuitBreaker } from "./circuitBreaker.js";
 import { InvalidScopeError, PolicyViolationError, UnknownTokenError, enforceToken, revokeToken, type RevocationReason } from "./token.js";
 import { delegateToken } from "./delegation.js";
 import { RequestNotPendingError, UnknownRequestError, approveRequest, denyRequest, requestToken } from "./tokenRequest.js";
@@ -26,10 +27,30 @@ function envNumber(name: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-const tokenStore = new TokenStore();
-const requestStore = new RequestStore();
-const policyStore = new PolicyStore();
 const auditLog = new AuditLog();
+// REQ-008: one shared breaker for both stores — in a real deployment they'd
+// likely sit behind the same backing database, so an outage takes both down
+// together, not independently. Threshold/cooldown overridable via
+// CIRCUIT_BREAKER_FAILURE_THRESHOLD / CIRCUIT_BREAKER_COOLDOWN_MS, same
+// "not hardcoded" treatment as every other judgment-call threshold here.
+// Only the two trust-relevant transitions (opened, closed) are logged — the
+// internal half-open probe waypoint isn't a decision, so it isn't one.
+const storeCircuitBreaker = new CircuitBreaker(
+  {
+    failureThreshold: envNumber("CIRCUIT_BREAKER_FAILURE_THRESHOLD"),
+    cooldownMs: envNumber("CIRCUIT_BREAKER_COOLDOWN_MS"),
+  },
+  (change) => {
+    if (change.to === "open") {
+      auditLog.record({ subject: "system", action: "policy_token_store", decision: "circuit_opened", reasonCode: change.reason });
+    } else if (change.to === "closed") {
+      auditLog.record({ subject: "system", action: "policy_token_store", decision: "circuit_closed", reasonCode: change.reason });
+    }
+  },
+);
+const tokenStore = new TokenStore(storeCircuitBreaker);
+const requestStore = new RequestStore();
+const policyStore = new PolicyStore(storeCircuitBreaker);
 // Thresholds are a judgment call — overridable without a code change via
 // ANOMALY_MAX_SCOPE_BREADTH / ANOMALY_VELOCITY_WINDOW_MS / ANOMALY_MAX_REQUESTS_PER_WINDOW.
 const anomalyDetector = new AnomalyDetector({
@@ -205,6 +226,25 @@ app.post("/mock-endpoints/:system/down", (req, res) => {
   res.status(200).json({ system, down });
 });
 
+// REQ-008: current breaker state for the Policy & Token Store — lets an
+// operator (or the Console) see whether requests are currently being
+// failed closed, without having to trigger one to find out.
+app.get("/circuit-breaker", (_req, res) => {
+  res.json({ state: storeCircuitBreaker.state() });
+});
+
+// Same demo/ops convenience as /mock-endpoints/:system/down, same reasoning:
+// TokenStore/PolicyStore are in-memory and can't fail on their own (ADR-006),
+// so this is what lets the "store is unreachable" path actually be shown,
+// not just asserted in a test. Deliberately not gated behind auth — see
+// ADR-009, which already names the whole API's lack of caller authentication
+// as a known, tracked gap; this route is not a special exception to that.
+app.post("/circuit-breaker/simulate-outage", (req, res) => {
+  const down = req.body?.down !== false;
+  storeCircuitBreaker.simulateOutage(down);
+  res.status(200).json({ down, state: storeCircuitBreaker.state() });
+});
+
 // GET /tokens — the console's Tokens tab. Every token this process has
 // issued, active or revoked; no filtering, the UI decides how to slice it.
 app.get("/tokens", (_req, res) => {
@@ -279,6 +319,12 @@ app.get("/audit-log/verify", (_req, res) => {
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err instanceof InvalidScopeError || err instanceof PolicyViolationError) {
     res.status(400).json({ error: err.message });
+    return;
+  }
+  // REQ-008: the store is failing closed — 503, not 500. This is the
+  // expected, correctly-handled shape of an outage, not an unexpected bug.
+  if (err instanceof CircuitOpenError) {
+    res.status(503).json({ error: err.message });
     return;
   }
   // Never swallow an error — log the real one, but don't leak internals to the caller.

@@ -7,17 +7,30 @@
 // whatever) would implement the same get/save shape later without touching
 // any caller — that's a separate infrastructure decision, not made here.
 
+import type { CircuitBreaker } from "./circuitBreaker.js";
 import type { Token } from "./token.js";
 
 export class TokenStore {
   #tokens = new Map<string, Token>();
+  #breaker?: CircuitBreaker;
+
+  // Optional — every existing caller that builds a TokenStore with no
+  // breaker keeps working exactly as before. REQ-008 only applies where one
+  // is actually wired in (server.ts).
+  constructor(breaker?: CircuitBreaker) {
+    this.#breaker = breaker;
+  }
 
   save(token: Token): void {
-    this.#tokens.set(token.id, token);
+    this.#guarded(() => this.#tokens.set(token.id, token));
   }
 
   get(id: string): Token | undefined {
-    return this.#tokens.get(id);
+    return this.#guarded(() => this.#tokens.get(id));
+  }
+
+  #guarded<T>(fn: () => T): T {
+    return this.#breaker ? this.#breaker.execute(fn) : fn();
   }
 
   // Direct children only — cascadeRevoke() walks further generations itself.

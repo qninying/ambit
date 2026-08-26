@@ -29,7 +29,7 @@ sequence land in the Audit Log with its chain-verified badge.
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **99 tests passing.**
+in a unit test. Current count: **116 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -74,6 +74,15 @@ in a unit test. Current count: **99 tests passing.**
   the previous entry's hash, so altering or deleting any entry is detectable,
   not just discouraged by convention. `GET /audit-log/verify` and the
   Console's Audit Log tab both expose this live.
+- A fail-closed circuit breaker (`src/circuitBreaker.ts`) in front of the
+  Token & Policy Store: closed → open after consecutive failures → half-open
+  probe after a cooldown → closed again on success. While open, `enforceToken`
+  and `delegateToken` return a clean denial (`store_unavailable`) rather than
+  crashing; `issueToken`/`createPolicy` fail loud with a 503, never a silent
+  success. `GET /circuit-breaker` for live state, `POST
+  /circuit-breaker/simulate-outage` to actually trip it — the store is
+  in-memory and can't fail on its own (see below), so this is what makes
+  the fail-closed behavior demonstrable rather than asserted.
 
 **What's explicitly not real yet:** persistence. Everything above resets on
 a server restart — an in-memory `Map`-backed store, chosen deliberately (see

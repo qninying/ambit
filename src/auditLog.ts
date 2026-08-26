@@ -33,7 +33,9 @@ export interface AuditLogEntry {
     | "request_denied"
     | "anomaly_detected"
     | "policy_created"
-    | "policy_modified";
+    | "policy_modified"
+    | "circuit_opened"
+    | "circuit_closed";
   reasonCode?: string;
   // Who performed a human-driven action (an approver), as opposed to
   // `subject`, which is the AI agent the token is for.

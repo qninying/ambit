@@ -1,5 +1,6 @@
 // REQ-001: short-lived, narrowly-scoped tokens for AI agents.
 import type { AuditLog } from "./auditLog.js";
+import { CircuitOpenError } from "./circuitBreaker.js";
 import type { PolicyStore } from "./policy.js";
 import type { TokenStore } from "./tokenStore.js";
 
@@ -114,7 +115,7 @@ export function issueToken(request: TokenRequest, store: TokenStore, policyStore
 // the one that positively confirms all three.
 export type EnforcementDecision =
   | { allowed: true }
-  | { allowed: false; reasonCode: "revoked" | "expired" | "out_of_scope" | "unknown_token" };
+  | { allowed: false; reasonCode: "revoked" | "expired" | "out_of_scope" | "unknown_token" | "store_unavailable" };
 
 // Takes an id, not a Token — every call re-reads current state from the
 // store, so a revocation that happened a moment ago is guaranteed to be seen
@@ -127,7 +128,20 @@ export function enforceToken(
   auditLog: AuditLog,
   now: Date = new Date(),
 ): EnforcementDecision {
-  const token = store.get(tokenId);
+  let token;
+  try {
+    token = store.get(tokenId);
+  } catch (err) {
+    // REQ-008: the store itself is unreachable (circuit open). Same
+    // guardrail as unknown_token below — can't confirm validity, so deny,
+    // never throw. enforceToken's contract is "always a decision," and a
+    // store outage doesn't get to be the exception to that.
+    if (err instanceof CircuitOpenError) {
+      auditLog.record({ tokenId, subject: "unknown", action, decision: "denied", reasonCode: "store_unavailable" }, now);
+      return { allowed: false, reasonCode: "store_unavailable" };
+    }
+    throw err;
+  }
   if (!token) {
     // Can't confirm validity at all — the guardrail says deny, not throw.
     auditLog.record({ tokenId, subject: "unknown", action, decision: "denied", reasonCode: "unknown_token" }, now);
