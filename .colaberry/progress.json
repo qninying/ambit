@@ -7,9 +7,9 @@
     "stories_submitted": 0,
     "stories_in_progress": 0,
     "stories_not_started": 13,
-    "criteria_total": 0,
+    "criteria_total": 41,
     "criteria_passed": 0,
-    "points_awarded": 804
+    "points_awarded": 0
   },
   "stories": [
     {
@@ -42,17 +42,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-001",
@@ -76,17 +66,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-002",
@@ -110,17 +90,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-003",
@@ -144,17 +114,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-004",
@@ -178,17 +138,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-005",
@@ -212,17 +162,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-006",
@@ -246,17 +186,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-007",
@@ -280,17 +210,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-008",
@@ -314,17 +234,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-009",
@@ -348,17 +258,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-010",
@@ -382,17 +282,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-011",
@@ -416,17 +306,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": 67,
-        "outstanding": []
-      }
+      "verification": null
     },
     {
       "id": "STORY-012",
@@ -450,17 +330,7 @@
       "tests_added": [],
       "notes": null,
       "updated_at": null,
-      "verification": {
-        "state": "not_started",
-        "criteria_passed": 0,
-        "criteria_total": 0,
-        "verified_at": null,
-        "commit_sha": null,
-        "commit_url": null,
-        "commit_at": null,
-        "points_awarded": null,
-        "outstanding": []
-      }
+      "verification": null
     }
   ]
 }

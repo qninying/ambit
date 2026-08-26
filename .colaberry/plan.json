@@ -1,0 +1,637 @@
+{
+  "schema_version": 2,
+  "project_name": "Ambit",
+  "descriptor": "An OAuth-style identity and access management system for autonomous AI agents, providing short-lived, narrowly-scoped tokens with human approval and real-time enforcement.",
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "kind": "FUNC",
+      "cluster": "Token Issuance",
+      "priority": "must",
+      "statement": "The system must issue short-lived, narrowly-scoped tokens for AI agents.",
+      "fulfilled_by": [
+        "STORY-001"
+      ]
+    },
+    {
+      "id": "REQ-002",
+      "kind": "FUNC",
+      "cluster": "Consent Management",
+      "priority": "must",
+      "statement": "The system must allow human approval for every token request via a plain-language consent screen.",
+      "fulfilled_by": [
+        "STORY-003"
+      ]
+    },
+    {
+      "id": "REQ-003",
+      "kind": "FUNC",
+      "cluster": "Delegation Management",
+      "priority": "must",
+      "statement": "The system must enforce that a subagent can only inherit a strict subset of its parent's scope.",
+      "fulfilled_by": [
+        "STORY-004"
+      ]
+    },
+    {
+      "id": "REQ-004",
+      "kind": "FUNC",
+      "cluster": "Enforcement",
+      "priority": "must",
+      "statement": "The system must validate token scope and revocation status in real-time at the Enforcement Gateway.",
+      "fulfilled_by": [
+        "STORY-001"
+      ]
+    },
+    {
+      "id": "REQ-005",
+      "kind": "FUNC",
+      "cluster": "Audit Logging",
+      "priority": "must",
+      "statement": "The system must log every allowed and blocked action to an immutable audit log.",
+      "fulfilled_by": [
+        "STORY-001"
+      ]
+    },
+    {
+      "id": "REQ-006",
+      "kind": "SAFE",
+      "cluster": "Enforcement",
+      "priority": "must",
+      "statement": "The system must deny actions when token validity or scope cannot be confirmed.",
+      "fulfilled_by": [
+        "STORY-005"
+      ]
+    },
+    {
+      "id": "REQ-007",
+      "kind": "CONSTRAINT",
+      "cluster": "Integration",
+      "priority": "must",
+      "statement": "The system must integrate with mock endpoints for email, code hosting, payment, and CRM systems.",
+      "fulfilled_by": [
+        "STORY-005"
+      ]
+    },
+    {
+      "id": "REQ-008",
+      "kind": "SAFE",
+      "cluster": "Enforcement",
+      "priority": "must",
+      "statement": "The system must provide a fail-closed circuit-breaker state when the Policy & Token Store is unreachable.",
+      "fulfilled_by": [
+        "STORY-009"
+      ]
+    },
+    {
+      "id": "REQ-009",
+      "kind": "FUNC",
+      "cluster": "Data Management",
+      "priority": "must",
+      "statement": "The system must support field-level redaction for customer data access.",
+      "fulfilled_by": [
+        "STORY-011"
+      ]
+    },
+    {
+      "id": "REQ-010",
+      "kind": "FUNC",
+      "cluster": "Audit Logging",
+      "priority": "must",
+      "statement": "The system must provide distinct reason codes for denied actions in the Audit Log.",
+      "fulfilled_by": [
+        "STORY-012"
+      ]
+    },
+    {
+      "id": "REQ-011",
+      "kind": "FUNC",
+      "cluster": "Policy Management",
+      "priority": "must",
+      "statement": "The system must allow policy definition for token scopes and constraints.",
+      "fulfilled_by": [
+        "STORY-007"
+      ]
+    },
+    {
+      "id": "REQ-012",
+      "kind": "SAFE",
+      "cluster": "Delegation Management",
+      "priority": "must",
+      "statement": "The system must ensure zero instances of a subagent obtaining a scope broader than its parent.",
+      "fulfilled_by": [
+        "STORY-004"
+      ]
+    },
+    {
+      "id": "REQ-013",
+      "kind": "FUNC",
+      "cluster": "Consent Management",
+      "priority": "must",
+      "statement": "The system must provide a Consent UI for approvers to review and approve token requests.",
+      "fulfilled_by": [
+        "STORY-003"
+      ]
+    },
+    {
+      "id": "REQ-014",
+      "kind": "FUNC",
+      "cluster": "Developer Experience",
+      "priority": "must",
+      "statement": "The system must provide a client SDK for developers to request and present tokens.",
+      "fulfilled_by": [
+        "STORY-008"
+      ]
+    },
+    {
+      "id": "REQ-015",
+      "kind": "SAFE",
+      "cluster": "Enforcement",
+      "priority": "must",
+      "statement": "The system must ensure that a revoked token's next call fails within the same request cycle.",
+      "fulfilled_by": [
+        "STORY-002"
+      ]
+    },
+    {
+      "id": "REQ-016",
+      "kind": "FUNC",
+      "cluster": "Security",
+      "priority": "must",
+      "statement": "The system must support anomaly detection for token requests.",
+      "fulfilled_by": [
+        "STORY-006"
+      ]
+    },
+    {
+      "id": "REQ-017",
+      "kind": "FUNC",
+      "cluster": "Policy Management",
+      "priority": "must",
+      "statement": "The system must provide a mechanism for human policy authorship and approval.",
+      "fulfilled_by": [
+        "STORY-007"
+      ]
+    },
+    {
+      "id": "REQ-018",
+      "kind": "FUNC",
+      "cluster": "Developer Experience",
+      "priority": "must",
+      "statement": "The system must provide error messages for rejected tokens indicating the reason (out of scope, expired, revoked).",
+      "fulfilled_by": [
+        "STORY-010"
+      ]
+    }
+  ],
+  "releases": [
+    {
+      "key": "r0",
+      "demo": "Show a token being issued, approved, enforced, and logged with real-time revocation handling.",
+      "goal": "Establish the core token issuance and enforcement mechanism with audit logging.",
+      "name": "Initial Skeleton",
+      "week_end": 1,
+      "week_start": 0,
+      "story_ids": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "starts_on": null,
+      "ends_on": null,
+      "is_demo_target": false
+    },
+    {
+      "key": "r1",
+      "demo": "Demonstrate human approval via Consent UI and subagent scope narrowing in action.",
+      "goal": "Implement consent management and delegation narrowing features.",
+      "name": "Consent and Delegation",
+      "week_end": 3,
+      "week_start": 2,
+      "story_ids": [
+        "STORY-003",
+        "STORY-004"
+      ],
+      "starts_on": null,
+      "ends_on": null,
+      "is_demo_target": false
+    },
+    {
+      "key": "r2",
+      "demo": "Show integration with mock systems and anomaly detection triggering alerts.",
+      "goal": "Integrate with mock endpoints and implement anomaly detection.",
+      "name": "Integration and Anomaly Detection",
+      "week_end": 5,
+      "week_start": 4,
+      "story_ids": [
+        "STORY-005",
+        "STORY-006"
+      ],
+      "starts_on": null,
+      "ends_on": null,
+      "is_demo_target": false
+    },
+    {
+      "key": "r3",
+      "demo": "Show policy creation and a developer using the SDK to request tokens.",
+      "goal": "Develop policy management features and provide a client SDK.",
+      "name": "Policy Management and SDK",
+      "week_end": 7,
+      "week_start": 6,
+      "story_ids": [
+        "STORY-007",
+        "STORY-008"
+      ],
+      "starts_on": null,
+      "ends_on": null,
+      "is_demo_target": false
+    },
+    {
+      "key": "r4",
+      "demo": "Demonstrate fail-closed circuit-breaker and detailed error messages for developers.",
+      "goal": "Implement final safety and usability enhancements.",
+      "name": "Final Enhancements",
+      "week_end": 9,
+      "week_start": 8,
+      "story_ids": [
+        "STORY-009",
+        "STORY-010",
+        "STORY-011",
+        "STORY-012"
+      ],
+      "starts_on": null,
+      "ends_on": null,
+      "is_demo_target": false
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "title": "Issue and enforce a token with audit logging",
+      "release": "r0",
+      "fulfills": [
+        "REQ-001",
+        "REQ-004",
+        "REQ-005"
+      ],
+      "narrative": "As a developer, I want to issue a token and have it enforced, so that I can ensure secure access control for AI agents.",
+      "acceptance": [
+        "Given a token request, when it is approved, then the token is issued and enforced.",
+        "Given a revoked token, when it is used, then the action is blocked.",
+        "Trust: Every action is logged in the Audit Log."
+      ],
+      "blocked_by": [],
+      "owner_agent": "Developer",
+      "failure_paths": [
+        "Token issuance fails due to invalid scope.",
+        "Token enforcement fails due to revocation.",
+        "Audit log entry fails to record action."
+      ],
+      "task_guidance": "Implement token issuance and enforcement logic. Ensure actions are logged to the Audit Log.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-002",
+      "title": "Implement real-time revocation handling",
+      "release": "r0",
+      "fulfills": [
+        "REQ-015"
+      ],
+      "narrative": "As a security officer, I want revoked tokens to fail immediately, so that unauthorized access is prevented.",
+      "acceptance": [
+        "Given a token, when it is revoked, then its next call fails immediately.",
+        "Given a revoked token, when it is used, then the action is blocked.",
+        "Trust: Revocation is logged with a reason code."
+      ],
+      "blocked_by": [],
+      "owner_agent": "Security Officer",
+      "failure_paths": [
+        "Revocation status check fails.",
+        "Revoked token is not blocked.",
+        "Revocation log entry fails."
+      ],
+      "task_guidance": "Ensure the Enforcement Gateway checks revocation status in real-time.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-003",
+      "title": "Implement Consent UI for token approval",
+      "release": "r1",
+      "fulfills": [
+        "REQ-002",
+        "REQ-013"
+      ],
+      "narrative": "As an approver, I want to approve token requests via a Consent UI, so that I can control access securely.",
+      "acceptance": [
+        "Given a token request, when it is displayed, then the approver can approve or deny it.",
+        "Given a denied request, when it is submitted, then the token is not issued.",
+        "Trust: Approval actions are logged."
+      ],
+      "blocked_by": [
+        "STORY-001"
+      ],
+      "owner_agent": "Approver",
+      "failure_paths": [
+        "Consent UI fails to load.",
+        "Approval action is not logged.",
+        "Denied request is incorrectly issued."
+      ],
+      "task_guidance": "Develop the Consent UI for token approval and integrate with the token issuance process.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-004",
+      "title": "Implement delegation narrowing for subagents",
+      "release": "r1",
+      "fulfills": [
+        "REQ-003",
+        "REQ-012"
+      ],
+      "narrative": "As a security officer, I want subagents to inherit a strict subset of their parent's scope, so that privilege escalation is prevented.",
+      "acceptance": [
+        "Given a subagent request, when it is processed, then it inherits a subset of the parent's scope.",
+        "Given a subagent request, when it exceeds the parent's scope, then it is denied.",
+        "Trust: Delegation actions are logged."
+      ],
+      "blocked_by": [
+        "STORY-001"
+      ],
+      "owner_agent": "Security Officer",
+      "failure_paths": [
+        "Subagent inherits full scope instead of subset.",
+        "Delegation action is not logged.",
+        "Excessive scope is incorrectly approved."
+      ],
+      "task_guidance": "Implement delegation logic to enforce scope narrowing for subagents.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-005",
+      "title": "Integrate with mock endpoints and deny actions when token validity or scope cannot be confirmed",
+      "release": "r2",
+      "fulfills": [
+        "REQ-006",
+        "REQ-007"
+      ],
+      "narrative": "As a system administrator, I want the system to deny actions when token validity or scope cannot be confirmed, so that unauthorized actions are prevented.",
+      "acceptance": [
+        "Given a valid token, when the token is used to access a mock endpoint, then the action is allowed.",
+        "Given an invalid token, when the token is used to access a mock endpoint, then the action is denied.",
+        "Trust: Given any token, when the token is used, then the action and its outcome are logged in the Audit Log."
+      ],
+      "blocked_by": [
+        "STORY-006"
+      ],
+      "owner_agent": "System Administrator",
+      "failure_paths": [
+        "Token is expired",
+        "Token scope is insufficient",
+        "Endpoint is unreachable"
+      ],
+      "task_guidance": "Ensure integration with mock endpoints includes checks for token validity and scope. Implement logging for all actions and outcomes in the Audit Log.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-006",
+      "title": "Implement anomaly detection for token requests",
+      "release": "r2",
+      "fulfills": [
+        "REQ-016"
+      ],
+      "narrative": "As a security officer, I want to detect anomalies in token requests, so that I can respond to potential security threats.",
+      "acceptance": [
+        "Given a token request, when it is anomalous, then an alert is triggered.",
+        "Given a normal request, when it is processed, then no alert is triggered.",
+        "Trust: Anomaly detection actions are logged."
+      ],
+      "blocked_by": [
+        "STORY-004"
+      ],
+      "owner_agent": "Security Officer",
+      "failure_paths": [
+        "Anomaly is not detected.",
+        "False positive alert is triggered.",
+        "Anomaly detection action is not logged."
+      ],
+      "task_guidance": "Develop anomaly detection logic for token requests and integrate with the alerting system.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-007",
+      "title": "Develop policy management features",
+      "release": "r3",
+      "fulfills": [
+        "REQ-011",
+        "REQ-017"
+      ],
+      "narrative": "As a policy manager, I want to define token scopes and constraints, so that I can control access policies.",
+      "acceptance": [
+        "Given a policy, when it is created, then it defines token scopes and constraints.",
+        "Given a policy, when it is modified, then changes are applied.",
+        "Trust: Policy actions are logged."
+      ],
+      "blocked_by": [
+        "STORY-006"
+      ],
+      "owner_agent": "Policy Manager",
+      "failure_paths": [
+        "Policy creation fails.",
+        "Policy changes are not applied.",
+        "Policy action is not logged."
+      ],
+      "task_guidance": "Implement policy management interface and logic for defining scopes and constraints.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-008",
+      "title": "Provide a client SDK for token requests",
+      "release": "r3",
+      "fulfills": [
+        "REQ-014"
+      ],
+      "narrative": "As a developer, I want a client SDK to request and present tokens, so that I can easily integrate with Ambit.",
+      "acceptance": [
+        "Given a developer, when they use the SDK, then they can request a token.",
+        "Given a token request, when it is invalid, then an error is returned.",
+        "Trust: SDK usage is logged."
+      ],
+      "blocked_by": [
+        "STORY-006"
+      ],
+      "owner_agent": "Developer",
+      "failure_paths": [
+        "SDK fails to request token.",
+        "Invalid token request does not return error.",
+        "SDK usage is not logged."
+      ],
+      "task_guidance": "Develop a client SDK for token requests and ensure it handles errors appropriately.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-009",
+      "title": "Implement fail-closed circuit-breaker for Policy & Token Store",
+      "release": "r4",
+      "fulfills": [
+        "REQ-008"
+      ],
+      "narrative": "As a security officer, I want a fail-closed circuit-breaker for the Policy & Token Store, so that I can ensure system security during outages.",
+      "acceptance": [
+        "Given the Policy & Token Store is unreachable, when a request is made, then it is denied.",
+        "Given the Store is reachable, when a request is made, then it is processed.",
+        "Trust: Circuit-breaker actions are logged."
+      ],
+      "blocked_by": [
+        "STORY-008"
+      ],
+      "owner_agent": "Security Officer",
+      "failure_paths": [
+        "Circuit-breaker fails to activate.",
+        "Request is incorrectly processed during outage.",
+        "Circuit-breaker action is not logged."
+      ],
+      "task_guidance": "Implement fail-closed logic for the Policy & Token Store and integrate with the alerting system.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-010",
+      "title": "Provide detailed error messages for rejected tokens",
+      "release": "r4",
+      "fulfills": [
+        "REQ-018"
+      ],
+      "narrative": "As a developer, I want detailed error messages for rejected tokens, so that I can understand why a token was rejected.",
+      "acceptance": [
+        "Given a rejected token, when it is used, then a detailed error message is returned.",
+        "Given a valid token, when it is used, then no error message is returned.",
+        "Trust: Error message actions are logged."
+      ],
+      "blocked_by": [
+        "STORY-008"
+      ],
+      "owner_agent": "Developer",
+      "failure_paths": [
+        "Error message is not detailed.",
+        "Valid token incorrectly returns error.",
+        "Error message action is not logged."
+      ],
+      "task_guidance": "Ensure error messages for rejected tokens are detailed and informative.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-011",
+      "title": "Support field-level redaction for customer data access",
+      "release": "r4",
+      "fulfills": [
+        "REQ-009"
+      ],
+      "narrative": "As a data privacy officer, I want field-level redaction for customer data access, so that sensitive information is protected.",
+      "acceptance": [
+        "Given a request for customer data, when the data is accessed, then sensitive fields are redacted.",
+        "Given a request for customer data, when the request lacks proper authorization, then access is denied.",
+        "Trust: Given any data access, when the data is accessed, then the access and redaction actions are logged in the Audit Log."
+      ],
+      "blocked_by": [
+        "STORY-010"
+      ],
+      "owner_agent": "Data Privacy Officer",
+      "failure_paths": [
+        "Unauthorized access attempt",
+        "Redaction rule misconfiguration",
+        "Data access layer failure"
+      ],
+      "task_guidance": "Implement field-level redaction in the data access layer. Ensure all access and redaction actions are logged.",
+      "due_on": null,
+      "due_baseline_on": null
+    },
+    {
+      "id": "STORY-012",
+      "title": "Provide distinct reason codes for denied actions in the Audit Log",
+      "release": "r4",
+      "fulfills": [
+        "REQ-010"
+      ],
+      "narrative": "As a compliance officer, I want distinct reason codes for denied actions in the Audit Log, so that I can understand why actions were denied.",
+      "acceptance": [
+        "Given a denied action, when the action is logged, then a distinct reason code is recorded.",
+        "Given a denied action due to token expiration, when the action is logged, then the reason code indicates token expiration.",
+        "Trust: Given any denied action, when the action is logged, then the reason code is included in the Audit Log."
+      ],
+      "blocked_by": [
+        "STORY-011"
+      ],
+      "owner_agent": "Compliance Officer",
+      "failure_paths": [
+        "Reason code not assigned",
+        "Incorrect reason code assigned",
+        "Audit Log update failure"
+      ],
+      "task_guidance": "Update the Audit Log schema to include reason codes for denied actions. Implement logic to assign reason codes based on denial reasons.",
+      "due_on": null,
+      "due_baseline_on": null
+    }
+  ],
+  "agents": [],
+  "project": {
+    "name": "Ambit",
+    "descriptor": "An OAuth-style identity and access management system for autonomous AI agents, providing short-lived, narrowly-scoped tokens with human approval and real-time enforcement.",
+    "repo_url": null,
+    "plan_version": 1,
+    "plan_sha256": "212833b322caa8cd1259dcda83dc4e73c1519a414cb35625dbcd33aa662d65c3"
+  },
+  "schedule": null,
+  "derived": {
+    "measures": [],
+    "guardrails": [
+      {
+        "id": "REQ-006",
+        "statement": "The system must deny actions when token validity or scope cannot be confirmed."
+      },
+      {
+        "id": "REQ-008",
+        "statement": "The system must provide a fail-closed circuit-breaker state when the Policy & Token Store is unreachable."
+      },
+      {
+        "id": "REQ-012",
+        "statement": "The system must ensure zero instances of a subagent obtaining a scope broader than its parent."
+      },
+      {
+        "id": "REQ-015",
+        "statement": "The system must ensure that a revoked token's next call fails within the same request cycle."
+      }
+    ],
+    "systems": [
+      "CRM"
+    ],
+    "roles": [
+      "developer",
+      "security officer",
+      "approver",
+      "system administrator",
+      "policy manager",
+      "data privacy officer",
+      "compliance officer"
+    ],
+    "counts": {
+      "requirements_total": 18,
+      "requirements_by_kind": {
+        "CONSTRAINT": 1,
+        "FUNC": 13,
+        "SAFE": 4
+      },
+      "stories_total": 12,
+      "releases_total": 5,
+      "agents_total": 0,
+      "failure_paths_total": 36,
+      "agents_by_autonomy": {}
+    }
+  }
+}
