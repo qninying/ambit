@@ -6,6 +6,11 @@ export interface TokenRequest {
   subject: string;
   scope: string[];
   ttlSeconds: number;
+  // Present when this token is delegated from another rather than issued at
+  // the root. Opaque to issueToken beyond the expiry cap below — delegateToken
+  // owns the scope/validity gatekeeping decision of whether delegation is
+  // allowed at all.
+  parentTokenId?: string;
 }
 
 export interface Token {
@@ -15,6 +20,7 @@ export interface Token {
   issuedAt: Date;
   expiresAt: Date;
   status: "active" | "revoked";
+  parentTokenId?: string;
 }
 
 export class InvalidScopeError extends Error {
@@ -43,13 +49,27 @@ export function issueToken(request: TokenRequest, store: TokenStore): Token {
   }
 
   const issuedAt = new Date();
+  let expiresAt = new Date(issuedAt.getTime() + request.ttlSeconds * 1000);
+
+  // A delegated token can never outlive the credential it was derived from —
+  // enforced here, unconditionally, so this can't be bypassed by a caller
+  // that forgets to check it. REQ-012's "never broader than parent" applies
+  // to lifetime as much as it does to scope.
+  if (request.parentTokenId) {
+    const parent = store.get(request.parentTokenId);
+    if (parent && expiresAt.getTime() > parent.expiresAt.getTime()) {
+      expiresAt = parent.expiresAt;
+    }
+  }
+
   const token: Token = {
     id: crypto.randomUUID(),
     subject: request.subject,
     scope: request.scope,
     issuedAt,
-    expiresAt: new Date(issuedAt.getTime() + request.ttlSeconds * 1000),
+    expiresAt,
     status: "active",
+    parentTokenId: request.parentTokenId,
   };
   store.save(token);
   return token;
@@ -132,5 +152,28 @@ export function revokeToken(
     decision: "revoked",
     reasonCode,
   }, now);
+
+  cascadeRevoke(tokenId, store, auditLog, now);
   return revoked;
+}
+
+// Revoking a token must revoke everything delegated from it, transitively —
+// a sub-subagent's token included, not just direct children. Otherwise a
+// subagent keeps working after the credential it was derived from no longer
+// does, which is the same class of problem REQ-012 exists to prevent, just
+// surfacing at revocation time instead of delegation time.
+function cascadeRevoke(parentId: string, store: TokenStore, auditLog: AuditLog, now: Date): void {
+  for (const child of store.childrenOf(parentId)) {
+    if (child.status !== "active") continue; // already revoked — don't double-log
+    const revokedChild: Token = { ...child, status: "revoked" };
+    store.save(revokedChild);
+    auditLog.record({
+      tokenId: child.id,
+      subject: child.subject,
+      action: "revoke",
+      decision: "revoked",
+      reasonCode: "parent_revoked",
+    }, now);
+    cascadeRevoke(child.id, store, auditLog, now);
+  }
 }

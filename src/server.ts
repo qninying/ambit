@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { AuditLog } from "./auditLog.js";
 import { InvalidScopeError, UnknownTokenError, enforceToken, revokeToken, type RevocationReason } from "./token.js";
+import { delegateToken } from "./delegation.js";
 import { RequestNotPendingError, UnknownRequestError, approveRequest, denyRequest, requestToken } from "./tokenRequest.js";
 import { RequestStore } from "./requestStore.js";
 import { TokenStore } from "./tokenStore.js";
@@ -110,6 +111,19 @@ app.post("/tokens/:id/revoke", (req, res) => {
       throw err;
     }
   }
+});
+
+// REQ-003/REQ-012: a subagent's token, narrowed from a parent's. Returns 200
+// with approved:false on denial rather than an error status — a refused
+// delegation is a normal outcome, not a fault, same treatment as /enforce.
+app.post("/tokens/:id/delegate", (req, res) => {
+  const { subject, scope, ttlSeconds } = req.body ?? {};
+  if (typeof subject !== "string" || !Array.isArray(scope) || typeof ttlSeconds !== "number") {
+    res.status(400).json({ error: "subject (string), scope (string[]), and ttlSeconds (number) are required" });
+    return;
+  }
+  const decision = delegateToken(req.params.id, subject, scope, ttlSeconds, tokenStore, auditLog);
+  res.status(200).json(decision);
 });
 
 app.get("/audit-log", (_req, res) => {

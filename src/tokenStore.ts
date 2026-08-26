@@ -19,4 +19,9 @@ export class TokenStore {
   get(id: string): Token | undefined {
     return this.#tokens.get(id);
   }
+
+  // Direct children only — cascadeRevoke() walks further generations itself.
+  childrenOf(parentId: string): Token[] {
+    return [...this.#tokens.values()].filter((t) => t.parentTokenId === parentId);
+  }
 }

@@ -168,21 +168,38 @@
       "criteria": [
         {
           "text": "Given a subagent request, when it is processed, then it inherits a subset of the parent's scope.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given a subagent request, when it exceeds the parent's scope, then it is denied.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust: Delegation actions are logged.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
-      "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "files_touched": [
+        "src/delegation.ts", "src/delegation.test.ts", "src/token.ts",
+        "src/tokenStore.ts", "src/server.ts"
+      ],
+      "tests_added": [
+        "delegateToken > issues a child token with a strict subset of the parent's scope",
+        "delegateToken > denies a request for scope the parent doesn't have",
+        "delegateToken > denies a request for the parent's exact scope, since that isn't narrower",
+        "delegateToken > denies an empty requested scope",
+        "delegateToken > denies delegation from an unknown parent token",
+        "delegateToken > denies delegation from a revoked parent token",
+        "delegateToken > denies delegation from an expired parent token",
+        "delegateToken > logs both an approved and a denied delegation attempt",
+        "delegateToken > caps a child token's expiry to the parent's, even if a longer TTL was requested",
+        "delegateToken > supports multi-level delegation — a subagent delegating to a sub-subagent",
+        "revokeToken cascading > revokes a delegated child when its parent is revoked",
+        "revokeToken cascading > cascades through multiple generations — a sub-subagent's token is revoked too",
+        "revokeToken cascading > logs each cascaded revocation with its own entry and a distinct reason code"
+      ],
+      "notes": "REQ-003 says STRICT subset, taken literally: requesting the parent's exact scope back is denied (reasonCode 'not_narrower'), not treated as valid narrowing. User explicitly rejected leaving related real-world gaps for later ('i dont want any gaps... if that is a scenario that could happen in the real world then it needs to be done'), which expanded this story beyond the literal 3 acceptance criteria into two related invariants: (1) a delegated token's expiresAt is capped to its parent's, enforced inside issueToken() itself so it can't be bypassed by any future caller with a parentTokenId; (2) revokeToken() now cascades — revoking a token recursively revokes every descendant (TokenStore gained childrenOf()), each logged with reasonCode 'parent_revoked' to distinguish cascade-triggered revocations from human-chosen ones in the audit trail. Multi-level delegation (subagent delegating to a sub-subagent) falls out of the design for free — delegateToken() treats any active token as a valid parent, no special-casing needed. Added POST /tokens/:id/delegate to the HTTP API (returns 200 with approved:false on denial, same pattern as /enforce, since a refused delegation is a normal outcome not a fault) — kept the demo path consistent with every other capability in this build having a real interface, not just tests.",
+      "updated_at": "2026-08-26T14:39:35Z",
       "verification": null
     },
     {
