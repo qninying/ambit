@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { AuditLog } from "./auditLog.js";
-import { InvalidScopeError, enforceToken, issueToken } from "./token.js";
+import { InvalidScopeError, PolicyViolationError, enforceToken, issueToken } from "./token.js";
 import { TokenStore } from "./tokenStore.js";
+import { PolicyStore, createPolicy, modifyPolicy } from "./policy.js";
 
 function setup() {
   return { store: new TokenStore(), auditLog: new AuditLog() };
@@ -38,6 +39,91 @@ describe("issueToken", () => {
   it("refuses to issue a token that would already be expired", () => {
     const { store } = setup();
     expect(() => issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 0 }, store)).toThrow(InvalidScopeError);
+  });
+});
+
+describe("issueToken with a policy attached", () => {
+  it("issues normally when the request stays within the policy's constraints", () => {
+    const { store, auditLog } = setup();
+    const policyStore = new PolicyStore();
+    const policy = createPolicy(
+      { name: "Standard agent access", allowedScope: ["email:send", "crm:read"], maxTtlSeconds: 3600 },
+      "policy-manager-1",
+      policyStore,
+      auditLog,
+    );
+
+    const token = issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300, policyId: policy.id }, store, policyStore);
+    expect(token.scope).toEqual(["email:send"]);
+  });
+
+  it("refuses to issue a token whose scope exceeds the policy's allowedScope", () => {
+    const { store, auditLog } = setup();
+    const policyStore = new PolicyStore();
+    const policy = createPolicy(
+      { name: "Email only", allowedScope: ["email:send"], maxTtlSeconds: 3600 },
+      "policy-manager-1",
+      policyStore,
+      auditLog,
+    );
+
+    expect(() =>
+      issueToken({ subject: "agent-42", scope: ["email:send", "payment:charge"], ttlSeconds: 300, policyId: policy.id }, store, policyStore),
+    ).toThrow(PolicyViolationError);
+  });
+
+  it("refuses to issue a token whose TTL exceeds the policy's maxTtlSeconds", () => {
+    const { store, auditLog } = setup();
+    const policyStore = new PolicyStore();
+    const policy = createPolicy(
+      { name: "Short-lived only", allowedScope: ["email:send"], maxTtlSeconds: 60 },
+      "policy-manager-1",
+      policyStore,
+      auditLog,
+    );
+
+    expect(() =>
+      issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 3600, policyId: policy.id }, store, policyStore),
+    ).toThrow(PolicyViolationError);
+  });
+
+  it("refuses to issue against an unknown policy id", () => {
+    const { store } = setup();
+    const policyStore = new PolicyStore();
+    expect(() =>
+      issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300, policyId: "not-a-real-id" }, store, policyStore),
+    ).toThrow(PolicyViolationError);
+  });
+
+  it("refuses to issue with a policyId when no PolicyStore is provided", () => {
+    const { store } = setup();
+    expect(() =>
+      issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300, policyId: "some-id" }, store),
+    ).toThrow(PolicyViolationError);
+  });
+
+  // "Given a policy, when it is modified, then changes are applied" — proven
+  // here by actually re-issuing after modifying, not by inspecting the
+  // stored policy record. The first issuance succeeds; after narrowing the
+  // policy, the exact same request that worked before must now be denied.
+  it("applies a policy modification to the very next issuance checked against it", () => {
+    const { store, auditLog } = setup();
+    const policyStore = new PolicyStore();
+    const policy = createPolicy(
+      { name: "Broad access", allowedScope: ["email:send", "payment:charge"], maxTtlSeconds: 3600 },
+      "policy-manager-1",
+      policyStore,
+      auditLog,
+    );
+
+    const first = issueToken({ subject: "agent-42", scope: ["payment:charge"], ttlSeconds: 300, policyId: policy.id }, store, policyStore);
+    expect(first.scope).toEqual(["payment:charge"]);
+
+    modifyPolicy(policy.id, { allowedScope: ["email:send"] }, "policy-manager-1", policyStore, auditLog);
+
+    expect(() =>
+      issueToken({ subject: "agent-99", scope: ["payment:charge"], ttlSeconds: 300, policyId: policy.id }, store, policyStore),
+    ).toThrow(PolicyViolationError);
   });
 });
 

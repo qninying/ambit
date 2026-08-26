@@ -5,9 +5,10 @@
 
 import type { AnomalyDetector } from "./anomalyDetector.js";
 import type { AuditLog } from "./auditLog.js";
-import { issueToken, type Token, type TokenRequest } from "./token.js";
+import { InvalidScopeError, PolicyViolationError, issueToken, type Token, type TokenRequest } from "./token.js";
 import type { TokenStore } from "./tokenStore.js";
 import type { RequestStore } from "./requestStore.js";
+import type { PolicyStore } from "./policy.js";
 
 export interface PendingRequest extends TokenRequest {
   id: string;
@@ -66,17 +67,46 @@ export function requestToken(
   return pending;
 }
 
+// policyStore is optional for the same reason issueToken's is: a request
+// that never named a policyId works exactly as before. One that did — set
+// by whoever submitted it via requestToken() — gets checked against it here,
+// at approval time, which is also where issueToken() actually runs.
 export function approveRequest(
   requestId: string,
   requestStore: RequestStore,
   tokenStore: TokenStore,
   auditLog: AuditLog,
   approver: string,
+  policyStore?: PolicyStore,
   now: Date = new Date(),
 ): Token {
   const pending = getPending(requestId, requestStore, "approve");
 
-  const token = issueToken({ subject: pending.subject, scope: pending.scope, ttlSeconds: pending.ttlSeconds }, tokenStore);
+  let token: Token;
+  try {
+    token = issueToken(
+      { subject: pending.subject, scope: pending.scope, ttlSeconds: pending.ttlSeconds, policyId: pending.policyId },
+      tokenStore,
+      policyStore,
+    );
+  } catch (err) {
+    // An approval attempt that a policy blocks is still a real event — an
+    // administrator investigating "why wasn't this approved" needs to find
+    // it here, not discover the audit log has nothing to say about it. The
+    // request stays pending (not consumed), so a second, in-policy attempt
+    // is still possible.
+    if (err instanceof PolicyViolationError || err instanceof InvalidScopeError) {
+      auditLog.record({
+        requestId,
+        subject: pending.subject,
+        action: "approve_request",
+        decision: "request_denied",
+        actor: approver,
+        reasonCode: err.message,
+      }, now);
+    }
+    throw err;
+  }
   requestStore.save({ ...pending, status: "approved" });
   auditLog.record({
     requestId,

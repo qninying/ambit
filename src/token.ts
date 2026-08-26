@@ -1,5 +1,6 @@
 // REQ-001: short-lived, narrowly-scoped tokens for AI agents.
 import type { AuditLog } from "./auditLog.js";
+import type { PolicyStore } from "./policy.js";
 import type { TokenStore } from "./tokenStore.js";
 
 export interface TokenRequest {
@@ -11,6 +12,17 @@ export interface TokenRequest {
   // owns the scope/validity gatekeeping decision of whether delegation is
   // allowed at all.
   parentTokenId?: string;
+  // REQ-011: when set, this issuance is checked against a human-authored
+  // policy (policy.ts) — optional so every existing caller (approveRequest,
+  // delegateToken) keeps working unchanged with no policy attached.
+  policyId?: string;
+}
+
+export class PolicyViolationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PolicyViolationError";
+  }
 }
 
 export interface Token {
@@ -40,12 +52,33 @@ export class UnknownTokenError extends Error {
 // Issuing a token means it's real from this point on — the store is what
 // enforceToken and revokeToken check against later, not this return value.
 // The caller still gets the Token back (e.g. to hand to whoever asked for it).
-export function issueToken(request: TokenRequest, store: TokenStore): Token {
+export function issueToken(request: TokenRequest, store: TokenStore, policyStore?: PolicyStore): Token {
   if (request.scope.length === 0) {
     throw new InvalidScopeError("scope must include at least one permission");
   }
   if (request.ttlSeconds <= 0) {
     throw new InvalidScopeError("ttlSeconds must be positive — a token cannot be issued already expired");
+  }
+
+  // "Given a policy, when it is modified, then changes are applied" is true
+  // BECAUSE this looks the policy up fresh by id on every issuance, same
+  // fresh-lookup pattern as TokenStore/RequestStore — not because anything
+  // here caches or assumes the policy hasn't changed since last checked.
+  if (request.policyId) {
+    if (!policyStore) {
+      throw new PolicyViolationError(`policyId "${request.policyId}" given but no PolicyStore was provided to check against`);
+    }
+    const policy = policyStore.get(request.policyId);
+    if (!policy) {
+      throw new PolicyViolationError(`unknown policy "${request.policyId}"`);
+    }
+    const withinScope = request.scope.every((s) => policy.allowedScope.includes(s));
+    if (!withinScope) {
+      throw new PolicyViolationError(`requested scope exceeds policy "${policy.name}"`);
+    }
+    if (request.ttlSeconds > policy.maxTtlSeconds) {
+      throw new PolicyViolationError(`requested ttlSeconds (${request.ttlSeconds}) exceeds policy "${policy.name}"'s max of ${policy.maxTtlSeconds}`);
+    }
   }
 
   const issuedAt = new Date();

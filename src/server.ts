@@ -8,13 +8,14 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { AnomalyDetector } from "./anomalyDetector.js";
 import { AuditLog } from "./auditLog.js";
-import { InvalidScopeError, UnknownTokenError, enforceToken, revokeToken, type RevocationReason } from "./token.js";
+import { InvalidScopeError, PolicyViolationError, UnknownTokenError, enforceToken, revokeToken, type RevocationReason } from "./token.js";
 import { delegateToken } from "./delegation.js";
 import { RequestNotPendingError, UnknownRequestError, approveRequest, denyRequest, requestToken } from "./tokenRequest.js";
 import { RequestStore } from "./requestStore.js";
 import { TokenStore } from "./tokenStore.js";
 import { MockEndpointRegistry, type MockSystem } from "./mockEndpoints.js";
 import { accessMockEndpoint } from "./mockEndpointAccess.js";
+import { InvalidPolicyError, PolicyStore, UnknownPolicyError, createPolicy, modifyPolicy } from "./policy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -27,6 +28,7 @@ function envNumber(name: string): number | undefined {
 
 const tokenStore = new TokenStore();
 const requestStore = new RequestStore();
+const policyStore = new PolicyStore();
 const auditLog = new AuditLog();
 // Thresholds are a judgment call — overridable without a code change via
 // ANOMALY_MAX_SCOPE_BREADTH / ANOMALY_VELOCITY_WINDOW_MS / ANOMALY_MAX_REQUESTS_PER_WINDOW.
@@ -50,12 +52,17 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 // POST /requests — submit a token request. Sits pending until an approver
 // acts on it; no token exists yet.
 app.post("/requests", (req, res) => {
-  const { subject, scope, ttlSeconds } = req.body ?? {};
+  const { subject, scope, ttlSeconds, policyId } = req.body ?? {};
   if (typeof subject !== "string" || !Array.isArray(scope) || typeof ttlSeconds !== "number") {
     res.status(400).json({ error: "subject (string), scope (string[]), and ttlSeconds (number) are required" });
     return;
   }
-  const pending = requestToken({ subject, scope, ttlSeconds }, requestStore, anomalyDetector, auditLog);
+  const pending = requestToken(
+    { subject, scope, ttlSeconds, policyId: typeof policyId === "string" ? policyId : undefined },
+    requestStore,
+    anomalyDetector,
+    auditLog,
+  );
   res.status(201).json(pending);
 });
 
@@ -72,7 +79,7 @@ app.post("/requests/:id/approve", (req, res) => {
     return;
   }
   try {
-    const token = approveRequest(req.params.id, requestStore, tokenStore, auditLog, approver);
+    const token = approveRequest(req.params.id, requestStore, tokenStore, auditLog, approver, policyStore);
     res.status(200).json(token);
   } catch (err) {
     if (err instanceof UnknownRequestError) {
@@ -179,12 +186,73 @@ app.post("/mock-endpoints/:system/down", (req, res) => {
   res.status(200).json({ system, down });
 });
 
+// GET /tokens — the console's Tokens tab. Every token this process has
+// issued, active or revoked; no filtering, the UI decides how to slice it.
+app.get("/tokens", (_req, res) => {
+  res.json(tokenStore.list());
+});
+
+// REQ-011/REQ-017: human-authored policies. PATCH, not PUT — a policy
+// modification is a partial change (name/allowedScope/maxTtlSeconds
+// individually), not a full replacement.
+app.post("/policies", (req, res) => {
+  const { name, allowedScope, maxTtlSeconds, authoredBy } = req.body ?? {};
+  if (typeof name !== "string" || !Array.isArray(allowedScope) || typeof maxTtlSeconds !== "number" || typeof authoredBy !== "string") {
+    res.status(400).json({ error: "name (string), allowedScope (string[]), maxTtlSeconds (number), and authoredBy (string) are required" });
+    return;
+  }
+  try {
+    const policy = createPolicy({ name, allowedScope, maxTtlSeconds }, authoredBy, policyStore, auditLog);
+    res.status(201).json(policy);
+  } catch (err) {
+    if (err instanceof InvalidPolicyError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      throw err;
+    }
+  }
+});
+
+app.get("/policies", (_req, res) => {
+  res.json(policyStore.list());
+});
+
+app.patch("/policies/:id", (req, res) => {
+  const { name, allowedScope, maxTtlSeconds, authoredBy } = req.body ?? {};
+  if (typeof authoredBy !== "string") {
+    res.status(400).json({ error: "authoredBy (string) is required" });
+    return;
+  }
+  try {
+    const policy = modifyPolicy(
+      req.params.id,
+      {
+        name: typeof name === "string" ? name : undefined,
+        allowedScope: Array.isArray(allowedScope) ? allowedScope : undefined,
+        maxTtlSeconds: typeof maxTtlSeconds === "number" ? maxTtlSeconds : undefined,
+      },
+      authoredBy,
+      policyStore,
+      auditLog,
+    );
+    res.status(200).json(policy);
+  } catch (err) {
+    if (err instanceof UnknownPolicyError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof InvalidPolicyError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      throw err;
+    }
+  }
+});
+
 app.get("/audit-log", (_req, res) => {
   res.json(auditLog.entries());
 });
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  if (err instanceof InvalidScopeError) {
+  if (err instanceof InvalidScopeError || err instanceof PolicyViolationError) {
     res.status(400).json({ error: err.message });
     return;
   }

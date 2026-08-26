@@ -24,4 +24,11 @@ export class TokenStore {
   childrenOf(parentId: string): Token[] {
     return [...this.#tokens.values()].filter((t) => t.parentTokenId === parentId);
   }
+
+  // For the console's Tokens tab — every token this process has ever issued,
+  // active or revoked. Real data, not a sample: an empty store shows an
+  // empty list, not a placeholder.
+  list(): Token[] {
+    return [...this.#tokens.values()];
+  }
 }

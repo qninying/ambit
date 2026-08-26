@@ -12,9 +12,18 @@ export interface AuditLogEntry {
   // failure path STORY-003 has to actually prevent, not just log around.
   tokenId?: string;
   requestId?: string;
+  policyId?: string;
   subject: string;
   action: string;
-  decision: "allowed" | "denied" | "revoked" | "request_approved" | "request_denied" | "anomaly_detected";
+  decision:
+    | "allowed"
+    | "denied"
+    | "revoked"
+    | "request_approved"
+    | "request_denied"
+    | "anomaly_detected"
+    | "policy_created"
+    | "policy_modified";
   reasonCode?: string;
   // Who performed a human-driven action (an approver), as opposed to
   // `subject`, which is the AI agent the token is for.

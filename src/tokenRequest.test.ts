@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { AnomalyDetector } from "./anomalyDetector.js";
 import { AuditLog } from "./auditLog.js";
+import { PolicyViolationError } from "./token.js";
+import { PolicyStore, createPolicy } from "./policy.js";
 import { RequestStore } from "./requestStore.js";
 import { TokenStore } from "./tokenStore.js";
 import {
@@ -107,6 +109,30 @@ describe("approveRequest", () => {
         actor: "approver-1",
       }),
     ]);
+  });
+
+  // A policy-blocked approval is still a real event — it must leave an
+  // audit trail, and the request must stay pending so a corrected, in-policy
+  // approval attempt is still possible (not silently consumed on failure).
+  it("logs a policy-violation denial when approval would exceed the attached policy, and leaves the request pending", () => {
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const policyStore = new PolicyStore();
+    const policy = createPolicy({ name: "Email only", allowedScope: ["email:send"], maxTtlSeconds: 3600 }, "policy-manager-1", policyStore, auditLog);
+    const pending = requestToken(
+      { subject: "agent-42", scope: ["payment:charge"], ttlSeconds: 300, policyId: policy.id },
+      requestStore,
+      anomalyDetector,
+      auditLog,
+    );
+
+    expect(() => approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1", policyStore)).toThrow(
+      PolicyViolationError,
+    );
+
+    expect(requestStore.get(pending.id)?.status).toBe("pending");
+    const entries = auditLog.entries().filter((e) => e.requestId === pending.id && e.action === "approve_request");
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ decision: "request_denied", actor: "approver-1" });
   });
 
   it("refuses to approve an unknown request id", () => {

@@ -289,21 +289,47 @@
       "criteria": [
         {
           "text": "Given a policy, when it is created, then it defines token scopes and constraints.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given a policy, when it is modified, then changes are applied.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust: Policy actions are logged.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
-      "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "files_touched": [
+        "src/policy.ts", "src/policy.test.ts", "src/token.ts", "src/token.test.ts",
+        "src/tokenRequest.ts", "src/tokenRequest.test.ts", "src/auditLog.ts",
+        "src/tokenStore.ts", "src/tokenStore.test.ts", "src/server.ts",
+        "public/console.html", "public/console.css", "public/console.js",
+        "public/consent.html"
+      ],
+      "tests_added": [
+        "createPolicy > creates a policy with the given scope and TTL constraints",
+        "createPolicy > refuses to create a policy with no name",
+        "createPolicy > refuses to create a policy with an empty allowedScope",
+        "createPolicy > refuses to create a policy with a non-positive maxTtlSeconds",
+        "createPolicy > logs policy creation with the authoring policy manager",
+        "modifyPolicy > updates the stored policy's constraints",
+        "modifyPolicy > leaves fields not included in the change untouched",
+        "modifyPolicy > refuses to modify an unknown policy id",
+        "modifyPolicy > refuses a modification that would leave the policy invalid",
+        "modifyPolicy > logs policy modification separately from creation",
+        "issueToken with a policy attached > issues normally when the request stays within the policy's constraints",
+        "issueToken with a policy attached > refuses to issue a token whose scope exceeds the policy's allowedScope",
+        "issueToken with a policy attached > refuses to issue a token whose TTL exceeds the policy's maxTtlSeconds",
+        "issueToken with a policy attached > refuses to issue against an unknown policy id",
+        "issueToken with a policy attached > refuses to issue with a policyId when no PolicyStore is provided",
+        "issueToken with a policy attached > applies a policy modification to the very next issuance checked against it",
+        "approveRequest > logs a policy-violation denial when approval would exceed the attached policy, and leaves the request pending",
+        "TokenStore.list > returns an empty list when nothing has been issued",
+        "TokenStore.list > returns every token issued, in this store"
+      ],
+      "notes": "Policy is not a passive record — issueToken() takes an optional policyId (and PolicyStore) and genuinely checks/denies against it; 'modified, changes are applied' is proven by re-issuing after modifying, not by inspecting the stored record. approveRequest() threads a request's attached policyId through to issueToken(). Also built the full Ambit Console (public/console.html/css/js) per explicit user direction mid-story: a single tabbed admin app (Overview/Requests/Tokens/Policies/Audit Log) replacing the standalone consent.html (now a redirect) — user explicitly pushed back on an initial 'Uber-inspired, map-centric' design suggestion as a domain mismatch and asked for real pushback going forward, not agreement; built instead as a dense enterprise-console layout (dark sidebar, real data only, no sample mode) consistent with that direction. During live UI testing found and fixed a real bug: the 4-second background poll could wipe an open create/edit form or in-progress typing out from under an operator — added explicit formOpen state tracking plus a data-fingerprint diff so a poll only re-renders when something has actually changed AND no form is open/focused. Also found and fixed a second real gap through hands-on testing (not a unit test): a policy-blocked approval attempt was silently un-logged — an administrator investigating 'why wasn't this approved' would have found nothing in the audit trail; approveRequest() now catches PolicyViolationError/InvalidScopeError, logs the denial with the real reason, and leaves the request pending (not consumed) so a corrected retry is still possible.",
+      "updated_at": "2026-08-26T17:27:29Z",
       "verification": null
     },
     {
