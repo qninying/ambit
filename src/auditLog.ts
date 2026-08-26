@@ -28,6 +28,7 @@ export interface AuditLogEntry {
     | "allowed"
     | "denied"
     | "revoked"
+    | "request_submitted"
     | "request_approved"
     | "request_denied"
     | "anomaly_detected"

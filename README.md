@@ -29,7 +29,7 @@ sequence land in the Audit Log with its chain-verified badge.
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **87 tests passing.**
+in a unit test. Current count: **99 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -51,6 +51,18 @@ in a unit test. Current count: **87 tests passing.**
   fresh on every issuance — editing a policy changes what the *next*
   issuance allows, proven by re-issuing after modifying, not by inspecting a
   stored record.
+
+**Client SDK**
+- [`sdk/ambitClient.ts`](sdk/ambitClient.ts) — `AmbitClient`, the thing an
+  external developer actually imports: `requestToken()`, `getRequest()` to
+  poll for a decision and the resulting token id, a typed `AmbitClientError`
+  on any failure. A submission carrying a caller-supplied `idempotencyKey`
+  is safe to retry — the server dedupes on `(subject, idempotencyKey)`
+  rather than creating a second request — so the SDK's own capped-retry
+  loop can recover from a lost response without a duplicate submission; a
+  4xx (an invalid request) is never retried, since a retry can't fix that.
+  Verified against a real ephemeral-port server in tests and, separately,
+  against the live dev server from a standalone script.
 
 **Trust and observability**
 - Anomaly detection (unusual scope breadth, request velocity) on every

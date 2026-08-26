@@ -34,20 +34,29 @@
           "passed": true
         },
         {
-          "text": "Trust — no tab shows a number, a connection or a result the project has not actually produced.",
+          "text": "Trust \u2014 no tab shows a number, a connection or a result the project has not actually produced.",
           "passed": true
         }
       ],
       "files_touched": [
-        "index.html", "outcomes.html", "users.html", "guardrails.html",
-        "systems.html", "project-management.html", "agents.html",
-        "knowledge-base.html", "data-model.html",
-        "assets/command-center.js", "assets/command-center.css",
-        ".colaberry/plan.json", ".colaberry/progress.json",
-        ".colaberry/manifest.json", ".colaberry/profile.json"
+        "index.html",
+        "outcomes.html",
+        "users.html",
+        "guardrails.html",
+        "systems.html",
+        "project-management.html",
+        "agents.html",
+        "knowledge-base.html",
+        "data-model.html",
+        "assets/command-center.js",
+        "assets/command-center.css",
+        ".colaberry/plan.json",
+        ".colaberry/progress.json",
+        ".colaberry/manifest.json",
+        ".colaberry/profile.json"
       ],
       "tests_added": [],
-      "notes": "All 9 tabs built and reachable; every list view's cards drill down to a detail page (Outcomes uses the brief's sanctioned no-measures empty state instead, since plan.derived.measures is empty). Verified in-browser over a local static server (fetch needs http://, not file://): zero console errors across all 9 pages and their drill-downs, Sample mode shows plausible labelled data on every tab, Real mode shows the honest current state (0/13 stories, 0/41 criteria, grey \"not checked from here\" on Systems, \"not enforced yet\" on all 4 Guardrails, \"no runs recorded\"/\"no skills registered yet\" on AI Agents). Found and fixed one real bug during verification: the Users & Use Case role-matching regex only recognized an uppercase vowel, so lowercase role names like \"approver\" (from plan.derived.roles) fell through to \"As a approver\" and matched 0 stories instead of 1 — fixed to a case-insensitive test.",
+      "notes": "All 9 tabs built and reachable; every list view's cards drill down to a detail page (Outcomes uses the brief's sanctioned no-measures empty state instead, since plan.derived.measures is empty). Verified in-browser over a local static server (fetch needs http://, not file://): zero console errors across all 9 pages and their drill-downs, Sample mode shows plausible labelled data on every tab, Real mode shows the honest current state (0/13 stories, 0/41 criteria, grey \"not checked from here\" on Systems, \"not enforced yet\" on all 4 Guardrails, \"no runs recorded\"/\"no skills registered yet\" on AI Agents). Found and fixed one real bug during verification: the Users & Use Case role-matching regex only recognized an uppercase vowel, so lowercase role names like \"approver\" (from plan.derived.roles) fell through to \"As a approver\" and matched 0 stories instead of 1 \u2014 fixed to a case-insensitive test.",
       "updated_at": "2026-08-26T02:25:38Z",
       "verification": null
     },
@@ -70,8 +79,13 @@
         }
       ],
       "files_touched": [
-        "src/token.ts", "src/token.test.ts", "src/auditLog.ts", "src/auditLog.test.ts",
-        "src/tokenStore.ts", "package.json", "tsconfig.json"
+        "src/token.ts",
+        "src/token.test.ts",
+        "src/auditLog.ts",
+        "src/auditLog.test.ts",
+        "src/tokenStore.ts",
+        "package.json",
+        "tsconfig.json"
       ],
       "tests_added": [
         "issueToken > issues an active token scoped and expiring as requested",
@@ -86,7 +100,7 @@
         "AuditLog > returns a fresh array from entries() each call, not a live reference the caller could mutate",
         "AuditLog > assigns each entry a unique id and the given occurredAt"
       ],
-      "notes": "Criterion 2 (revoked token blocked) is now genuinely true too — not from any test written for THIS story, but because STORY-002 (revokeToken + TokenStore) landed afterward and made it real; see revokeToken.test.ts. Flipped honestly rather than leaving it stale now that the underlying capability exists. issueToken and enforceToken both changed signature when STORY-002 introduced TokenStore as the source of truth (issueToken now takes a store and saves into it; enforceToken takes a token id and looks it up fresh, not a Token object) — this file's own tests were updated to match, all still passing.",
+      "notes": "Criterion 2 (revoked token blocked) is now genuinely true too \u2014 not from any test written for THIS story, but because STORY-002 (revokeToken + TokenStore) landed afterward and made it real; see revokeToken.test.ts. Flipped honestly rather than leaving it stale now that the underlying capability exists. issueToken and enforceToken both changed signature when STORY-002 introduced TokenStore as the source of truth (issueToken now takes a store and saves into it; enforceToken takes a token id and looks it up fresh, not a Token object) \u2014 this file's own tests were updated to match, all still passing.",
       "updated_at": "2026-08-26T13:58:28Z",
       "verification": null
     },
@@ -109,8 +123,11 @@
         }
       ],
       "files_touched": [
-        "src/token.ts", "src/tokenStore.ts", "src/revokeToken.test.ts",
-        "src/token.test.ts", "src/auditLog.ts"
+        "src/token.ts",
+        "src/tokenStore.ts",
+        "src/revokeToken.test.ts",
+        "src/token.test.ts",
+        "src/auditLog.ts"
       ],
       "tests_added": [
         "revokeToken > makes the very next enforceToken call by id fail, right after revocation",
@@ -119,7 +136,7 @@
         "revokeToken > updates the token's own status to revoked in the store",
         "revokeToken > refuses to revoke a token id that was never issued"
       ],
-      "notes": "Built a real TokenStore (in-memory Map, single source of truth by token id) rather than passing Token objects by value between calls, per explicit user direction that this build should demonstrate real, enterprise-grade behavior — not tests that pass by construction. enforceToken and revokeToken both re-read the store fresh on every call, so revocation is provably real-time: the proof in revokeToken.test.ts looks the token up by id again after revoking, never reuses the object issueToken originally returned. AuditLogEntry's decision union grew a third value (\"revoked\", alongside \"allowed\"/\"denied\") rather than starting a second log, per REQ-005's \"one immutable audit log\" framing. RevocationReason is a closed union (compromised/no_longer_needed/policy_violation/superseded), not a free-form string, since \"logged with a reason code\" implies a defined code, not arbitrary text.",
+      "notes": "Built a real TokenStore (in-memory Map, single source of truth by token id) rather than passing Token objects by value between calls, per explicit user direction that this build should demonstrate real, enterprise-grade behavior \u2014 not tests that pass by construction. enforceToken and revokeToken both re-read the store fresh on every call, so revocation is provably real-time: the proof in revokeToken.test.ts looks the token up by id again after revoking, never reuses the object issueToken originally returned. AuditLogEntry's decision union grew a third value (\"revoked\", alongside \"allowed\"/\"denied\") rather than starting a second log, per REQ-005's \"one immutable audit log\" framing. RevocationReason is a closed union (compromised/no_longer_needed/policy_violation/superseded), not a free-form string, since \"logged with a reason code\" implies a defined code, not arbitrary text.",
       "updated_at": "2026-08-26T13:58:28Z",
       "verification": null
     },
@@ -142,9 +159,14 @@
         }
       ],
       "files_touched": [
-        "src/tokenRequest.ts", "src/tokenRequest.test.ts", "src/requestStore.ts",
-        "src/auditLog.ts", "src/server.ts", "public/consent.html",
-        "package.json", "package-lock.json"
+        "src/tokenRequest.ts",
+        "src/tokenRequest.test.ts",
+        "src/requestStore.ts",
+        "src/auditLog.ts",
+        "src/server.ts",
+        "public/consent.html",
+        "package.json",
+        "package-lock.json"
       ],
       "tests_added": [
         "requestToken > creates a pending request, not a token",
@@ -157,7 +179,7 @@
         "denyRequest > refuses to deny an unknown request id",
         "denyRequest > refuses to deny an already-decided request"
       ],
-      "notes": "This is the story that actually closes the demo-path gap flagged at the end of STORY-002: added a real Express server (src/server.ts) and a Consent UI page (public/consent.html) — first genuinely interactive surface in the whole build, not just code+tests. Domain logic (RequestStore, requestToken/approveRequest/denyRequest) and the HTTP+UI layer were built as two separate confirmed steps. AuditLogEntry gained requestId/actor fields and request_approved/request_denied decision values; tokenId became optional since a denied request never gets one — verified via curl that a denied request's audit entry genuinely has no tokenId field at all. End-to-end verified over real HTTP, not mocked: submitted a request through the actual browser UI, approved it, confirmed a real token exists in the store, enforced an action against it (allowed), revoked it, confirmed the next enforcement is denied — then a separate request through the UI, denied via the Deny button, confirmed via the audit log that no token was ever created for it. Also smoke-tested error paths over HTTP directly (not just unit tests): double-approve → 409, unknown request id → 404, unknown token id on enforce → 200 with allowed:false (guardrail: deny, don't error, when validity can't be confirmed), missing required field → 400.",
+      "notes": "This is the story that actually closes the demo-path gap flagged at the end of STORY-002: added a real Express server (src/server.ts) and a Consent UI page (public/consent.html) \u2014 first genuinely interactive surface in the whole build, not just code+tests. Domain logic (RequestStore, requestToken/approveRequest/denyRequest) and the HTTP+UI layer were built as two separate confirmed steps. AuditLogEntry gained requestId/actor fields and request_approved/request_denied decision values; tokenId became optional since a denied request never gets one \u2014 verified via curl that a denied request's audit entry genuinely has no tokenId field at all. End-to-end verified over real HTTP, not mocked: submitted a request through the actual browser UI, approved it, confirmed a real token exists in the store, enforced an action against it (allowed), revoked it, confirmed the next enforcement is denied \u2014 then a separate request through the UI, denied via the Deny button, confirmed via the audit log that no token was ever created for it. Also smoke-tested error paths over HTTP directly (not just unit tests): double-approve \u2192 409, unknown request id \u2192 404, unknown token id on enforce \u2192 200 with allowed:false (guardrail: deny, don't error, when validity can't be confirmed), missing required field \u2192 400.",
       "updated_at": "2026-08-26T14:23:17Z",
       "verification": null
     },
@@ -180,8 +202,11 @@
         }
       ],
       "files_touched": [
-        "src/delegation.ts", "src/delegation.test.ts", "src/token.ts",
-        "src/tokenStore.ts", "src/server.ts"
+        "src/delegation.ts",
+        "src/delegation.test.ts",
+        "src/token.ts",
+        "src/tokenStore.ts",
+        "src/server.ts"
       ],
       "tests_added": [
         "delegateToken > issues a child token with a strict subset of the parent's scope",
@@ -193,12 +218,12 @@
         "delegateToken > denies delegation from an expired parent token",
         "delegateToken > logs both an approved and a denied delegation attempt",
         "delegateToken > caps a child token's expiry to the parent's, even if a longer TTL was requested",
-        "delegateToken > supports multi-level delegation — a subagent delegating to a sub-subagent",
+        "delegateToken > supports multi-level delegation \u2014 a subagent delegating to a sub-subagent",
         "revokeToken cascading > revokes a delegated child when its parent is revoked",
-        "revokeToken cascading > cascades through multiple generations — a sub-subagent's token is revoked too",
+        "revokeToken cascading > cascades through multiple generations \u2014 a sub-subagent's token is revoked too",
         "revokeToken cascading > logs each cascaded revocation with its own entry and a distinct reason code"
       ],
-      "notes": "REQ-003 says STRICT subset, taken literally: requesting the parent's exact scope back is denied (reasonCode 'not_narrower'), not treated as valid narrowing. User explicitly rejected leaving related real-world gaps for later ('i dont want any gaps... if that is a scenario that could happen in the real world then it needs to be done'), which expanded this story beyond the literal 3 acceptance criteria into two related invariants: (1) a delegated token's expiresAt is capped to its parent's, enforced inside issueToken() itself so it can't be bypassed by any future caller with a parentTokenId; (2) revokeToken() now cascades — revoking a token recursively revokes every descendant (TokenStore gained childrenOf()), each logged with reasonCode 'parent_revoked' to distinguish cascade-triggered revocations from human-chosen ones in the audit trail. Multi-level delegation (subagent delegating to a sub-subagent) falls out of the design for free — delegateToken() treats any active token as a valid parent, no special-casing needed. Added POST /tokens/:id/delegate to the HTTP API (returns 200 with approved:false on denial, same pattern as /enforce, since a refused delegation is a normal outcome not a fault) — kept the demo path consistent with every other capability in this build having a real interface, not just tests.",
+      "notes": "REQ-003 says STRICT subset, taken literally: requesting the parent's exact scope back is denied (reasonCode 'not_narrower'), not treated as valid narrowing. User explicitly rejected leaving related real-world gaps for later ('i dont want any gaps... if that is a scenario that could happen in the real world then it needs to be done'), which expanded this story beyond the literal 3 acceptance criteria into two related invariants: (1) a delegated token's expiresAt is capped to its parent's, enforced inside issueToken() itself so it can't be bypassed by any future caller with a parentTokenId; (2) revokeToken() now cascades \u2014 revoking a token recursively revokes every descendant (TokenStore gained childrenOf()), each logged with reasonCode 'parent_revoked' to distinguish cascade-triggered revocations from human-chosen ones in the audit trail. Multi-level delegation (subagent delegating to a sub-subagent) falls out of the design for free \u2014 delegateToken() treats any active token as a valid parent, no special-casing needed. Added POST /tokens/:id/delegate to the HTTP API (returns 200 with approved:false on denial, same pattern as /enforce, since a refused delegation is a normal outcome not a fault) \u2014 kept the demo path consistent with every other capability in this build having a real interface, not just tests.",
       "updated_at": "2026-08-26T14:39:35Z",
       "verification": null
     },
@@ -221,9 +246,12 @@
         }
       ],
       "files_touched": [
-        "src/mockEndpoints.ts", "src/mockEndpoints.test.ts",
-        "src/mockEndpointAccess.ts", "src/mockEndpointAccess.test.ts",
-        "src/auditLog.ts", "src/server.ts"
+        "src/mockEndpoints.ts",
+        "src/mockEndpoints.test.ts",
+        "src/mockEndpointAccess.ts",
+        "src/mockEndpointAccess.test.ts",
+        "src/auditLog.ts",
+        "src/server.ts"
       ],
       "tests_added": [
         "MockEndpointRegistry > succeeds for a system that's up",
@@ -235,11 +263,11 @@
         "accessMockEndpoint > denies an unknown token id and never calls the endpoint",
         "accessMockEndpoint > denies a revoked token and never calls the endpoint",
         "accessMockEndpoint > denies a token that lacks the scope for this action and never calls the endpoint",
-        "accessMockEndpoint > does not log an outcome entry for a denied access — only the gateway's own denial",
+        "accessMockEndpoint > does not log an outcome entry for a denied access \u2014 only the gateway's own denial",
         "accessMockEndpoint > logs an unreachable outcome, after retrying, when the endpoint is down",
         "accessMockEndpoint > recovers on retry if the endpoint comes back up between attempts"
       ],
-      "notes": "REQ-007's 4 systems (email, code hosting, payment, CRM) simulated via MockEndpointRegistry with a deterministic setDown() toggle rather than random failure, so 'endpoint is unreachable' is genuinely testable, not flaky. accessMockEndpoint() reuses enforceToken() as-is for the gating decision (REQ-004/006 already cover this correctly, nothing duplicated) and only calls the mock endpoint when that gate allows it — verified a denied token never reaches the endpoint at all, via vi.spyOn asserting zero calls, not just checking the return value. This is the first genuinely external-shaped call in the build, so applied CLAUDE.md's 'every external call gets an explicit timeout and capped retries' rule for real: a Promise.race timeout wrapper and 2 capped attempts with a short delay between them, both configurable (not hardcoded) via MockEndpointAccessConfig + ACCESS_TIMEOUT_MS/ACCESS_MAX_ATTEMPTS/ACCESS_RETRY_DELAY_MS env vars in server.ts, proactively applying the same 'no hardcoded magic' standard the user set for STORY-006's thresholds without being asked again. AuditLogEntry gained an outcome field ('success'|'unreachable'), logged as a SECOND entry alongside enforceToken's own allow/deny entry — the gateway's decision and the integration's actual result are two different facts. Added POST /tokens/:id/access and a demo-only POST /mock-endpoints/:system/down toggle to server.ts.",
+      "notes": "REQ-007's 4 systems (email, code hosting, payment, CRM) simulated via MockEndpointRegistry with a deterministic setDown() toggle rather than random failure, so 'endpoint is unreachable' is genuinely testable, not flaky. accessMockEndpoint() reuses enforceToken() as-is for the gating decision (REQ-004/006 already cover this correctly, nothing duplicated) and only calls the mock endpoint when that gate allows it \u2014 verified a denied token never reaches the endpoint at all, via vi.spyOn asserting zero calls, not just checking the return value. This is the first genuinely external-shaped call in the build, so applied CLAUDE.md's 'every external call gets an explicit timeout and capped retries' rule for real: a Promise.race timeout wrapper and 2 capped attempts with a short delay between them, both configurable (not hardcoded) via MockEndpointAccessConfig + ACCESS_TIMEOUT_MS/ACCESS_MAX_ATTEMPTS/ACCESS_RETRY_DELAY_MS env vars in server.ts, proactively applying the same 'no hardcoded magic' standard the user set for STORY-006's thresholds without being asked again. AuditLogEntry gained an outcome field ('success'|'unreachable'), logged as a SECOND entry alongside enforceToken's own allow/deny entry \u2014 the gateway's decision and the integration's actual result are two different facts. Added POST /tokens/:id/access and a demo-only POST /mock-endpoints/:system/down toggle to server.ts.",
       "updated_at": "2026-08-26T15:46:59Z",
       "verification": null
     },
@@ -262,8 +290,12 @@
         }
       ],
       "files_touched": [
-        "src/anomalyDetector.ts", "src/anomalyDetector.test.ts", "src/tokenRequest.ts",
-        "src/tokenRequest.test.ts", "src/auditLog.ts", "src/server.ts"
+        "src/anomalyDetector.ts",
+        "src/anomalyDetector.test.ts",
+        "src/tokenRequest.ts",
+        "src/tokenRequest.test.ts",
+        "src/auditLog.ts",
+        "src/server.ts"
       ],
       "tests_added": [
         "AnomalyDetector > does not flag a single, reasonably-scoped request",
@@ -278,7 +310,7 @@
         "AnomalyDetector > honors a custom maxRequestsPerWindow instead of the default",
         "AnomalyDetector > falls back to the default for any config field left unset"
       ],
-      "notes": "Sequenced ahead of STORY-005 per the real dependency graph in plan.json (STORY-005.blocked_by includes STORY-006, not the reverse) — flagged the numbering mismatch to the user before starting rather than building 005 first and hitting the dependency out of order. Nothing in docs/REQUIREMENTS.md or docs/stories/STORY-006.md defines what 'anomalous' means, so picked two real, explainable, testable signals rather than a stub: scope breadth (>3 items in one request) and velocity (>3 requests from the same subject within a 60s window, tracked per-subject so one agent's burst can't flag an unrelated one — this is the concrete guard against the 'false positive alert is triggered' failure path named in the story). Wired into requestToken() itself (STORY-003) so every submission is checked automatically, not an opt-in step a caller could skip; only writes an audit entry when something actually fires, so 'no alert is triggered' for a normal request is literally true (checked as auditLog.entries() having length 0, not just an unasserted default) rather than a logged 'nothing found' entry every time. Detection is a signal only — an anomalous request still goes through the normal STORY-003 consent flow untouched, nothing here auto-denies it. User pushed back on an 85% confidence score being raised without anything actually changing ('i need the confidence score at 90'); rather than relabel the same number, made the underlying gap (thresholds as unconfirmed hardcoded judgment calls) real: AnomalyDetectorConfig is now constructor-injectable with a centralized DEFAULT_ANOMALY_CONFIG, and server.ts reads ANOMALY_MAX_SCOPE_BREADTH/ANOMALY_VELOCITY_WINDOW_MS/ANOMALY_MAX_REQUESTS_PER_WINDOW env vars to override at runtime — a wrong guess is now a config change, not a code change. Verified live, not just unit-tested: started the server with ANOMALY_MAX_SCOPE_BREADTH=1 and confirmed a 2-item request was flagged that wouldn't be under the default.",
+      "notes": "Sequenced ahead of STORY-005 per the real dependency graph in plan.json (STORY-005.blocked_by includes STORY-006, not the reverse) \u2014 flagged the numbering mismatch to the user before starting rather than building 005 first and hitting the dependency out of order. Nothing in docs/REQUIREMENTS.md or docs/stories/STORY-006.md defines what 'anomalous' means, so picked two real, explainable, testable signals rather than a stub: scope breadth (>3 items in one request) and velocity (>3 requests from the same subject within a 60s window, tracked per-subject so one agent's burst can't flag an unrelated one \u2014 this is the concrete guard against the 'false positive alert is triggered' failure path named in the story). Wired into requestToken() itself (STORY-003) so every submission is checked automatically, not an opt-in step a caller could skip; only writes an audit entry when something actually fires, so 'no alert is triggered' for a normal request is literally true (checked as auditLog.entries() having length 0, not just an unasserted default) rather than a logged 'nothing found' entry every time. Detection is a signal only \u2014 an anomalous request still goes through the normal STORY-003 consent flow untouched, nothing here auto-denies it. User pushed back on an 85% confidence score being raised without anything actually changing ('i need the confidence score at 90'); rather than relabel the same number, made the underlying gap (thresholds as unconfirmed hardcoded judgment calls) real: AnomalyDetectorConfig is now constructor-injectable with a centralized DEFAULT_ANOMALY_CONFIG, and server.ts reads ANOMALY_MAX_SCOPE_BREADTH/ANOMALY_VELOCITY_WINDOW_MS/ANOMALY_MAX_REQUESTS_PER_WINDOW env vars to override at runtime \u2014 a wrong guess is now a config change, not a code change. Verified live, not just unit-tested: started the server with ANOMALY_MAX_SCOPE_BREADTH=1 and confirmed a 2-item request was flagged that wouldn't be under the default.",
       "updated_at": "2026-08-26T15:09:38Z",
       "verification": null
     },
@@ -301,10 +333,19 @@
         }
       ],
       "files_touched": [
-        "src/policy.ts", "src/policy.test.ts", "src/token.ts", "src/token.test.ts",
-        "src/tokenRequest.ts", "src/tokenRequest.test.ts", "src/auditLog.ts",
-        "src/tokenStore.ts", "src/tokenStore.test.ts", "src/server.ts",
-        "public/console.html", "public/console.css", "public/console.js",
+        "src/policy.ts",
+        "src/policy.test.ts",
+        "src/token.ts",
+        "src/token.test.ts",
+        "src/tokenRequest.ts",
+        "src/tokenRequest.test.ts",
+        "src/auditLog.ts",
+        "src/tokenStore.ts",
+        "src/tokenStore.test.ts",
+        "src/server.ts",
+        "public/console.html",
+        "public/console.css",
+        "public/console.js",
         "public/consent.html"
       ],
       "tests_added": [
@@ -328,7 +369,7 @@
         "TokenStore.list > returns an empty list when nothing has been issued",
         "TokenStore.list > returns every token issued, in this store"
       ],
-      "notes": "Policy is not a passive record — issueToken() takes an optional policyId (and PolicyStore) and genuinely checks/denies against it; 'modified, changes are applied' is proven by re-issuing after modifying, not by inspecting the stored record. approveRequest() threads a request's attached policyId through to issueToken(). Also built the full Ambit Console (public/console.html/css/js) per explicit user direction mid-story: a single tabbed admin app (Overview/Requests/Tokens/Policies/Audit Log) replacing the standalone consent.html (now a redirect) — user explicitly pushed back on an initial 'Uber-inspired, map-centric' design suggestion as a domain mismatch and asked for real pushback going forward, not agreement; built instead as a dense enterprise-console layout (dark sidebar, real data only, no sample mode) consistent with that direction. During live UI testing found and fixed a real bug: the 4-second background poll could wipe an open create/edit form or in-progress typing out from under an operator — added explicit formOpen state tracking plus a data-fingerprint diff so a poll only re-renders when something has actually changed AND no form is open/focused. Also found and fixed a second real gap through hands-on testing (not a unit test): a policy-blocked approval attempt was silently un-logged — an administrator investigating 'why wasn't this approved' would have found nothing in the audit trail; approveRequest() now catches PolicyViolationError/InvalidScopeError, logs the denial with the real reason, and leaves the request pending (not consumed) so a corrected retry is still possible.",
+      "notes": "Policy is not a passive record \u2014 issueToken() takes an optional policyId (and PolicyStore) and genuinely checks/denies against it; 'modified, changes are applied' is proven by re-issuing after modifying, not by inspecting the stored record. approveRequest() threads a request's attached policyId through to issueToken(). Also built the full Ambit Console (public/console.html/css/js) per explicit user direction mid-story: a single tabbed admin app (Overview/Requests/Tokens/Policies/Audit Log) replacing the standalone consent.html (now a redirect) \u2014 user explicitly pushed back on an initial 'Uber-inspired, map-centric' design suggestion as a domain mismatch and asked for real pushback going forward, not agreement; built instead as a dense enterprise-console layout (dark sidebar, real data only, no sample mode) consistent with that direction. During live UI testing found and fixed a real bug: the 4-second background poll could wipe an open create/edit form or in-progress typing out from under an operator \u2014 added explicit formOpen state tracking plus a data-fingerprint diff so a poll only re-renders when something has actually changed AND no form is open/focused. Also found and fixed a second real gap through hands-on testing (not a unit test): a policy-blocked approval attempt was silently un-logged \u2014 an administrator investigating 'why wasn't this approved' would have found nothing in the audit trail; approveRequest() now catches PolicyViolationError/InvalidScopeError, logs the denial with the real reason, and leaves the request pending (not consumed) so a corrected retry is still possible.",
       "updated_at": "2026-08-26T17:27:29Z",
       "verification": null
     },
@@ -339,21 +380,43 @@
       "criteria": [
         {
           "text": "Given a developer, when they use the SDK, then they can request a token.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given a token request, when it is invalid, then an error is returned.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust: SDK usage is logged.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
-      "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "files_touched": [
+        "sdk/ambitClient.ts",
+        "sdk/ambitClient.test.ts",
+        "src/tokenRequest.ts",
+        "src/tokenRequest.test.ts",
+        "src/requestStore.ts",
+        "src/auditLog.ts",
+        "src/server.ts",
+        "tsconfig.json"
+      ],
+      "tests_added": [
+        "requestToken > logs an unconditional request_submitted entry for every submission",
+        "requestToken > returns the existing request instead of creating a duplicate when the same idempotencyKey is reused",
+        "requestToken > treats the same idempotencyKey from two different subjects as two separate requests",
+        "approveRequest > records the issued token's id back onto the request once approved",
+        "AmbitClient.requestToken > submits a real request to the real server and gets a pending request back",
+        "AmbitClient.requestToken > throws a typed AmbitClientError with the server's own message for an invalid request",
+        "AmbitClient.requestToken > does not retry a 400, even when an idempotencyKey makes retries otherwise available",
+        "AmbitClient.requestToken > submitting the same idempotencyKey twice returns the same request rather than creating a second one",
+        "AmbitClient reliability > retries a request bearing an idempotencyKey after a transient 500 and succeeds on the next attempt",
+        "AmbitClient reliability > times out a request that never responds, instead of hanging indefinitely",
+        "AmbitClient.getRequest > reads back the real status of a request submitted through the SDK",
+        "AmbitClient.getRequest > throws a 404 AmbitClientError for a request id that doesn't exist"
+      ],
+      "notes": "Built sdk/ambitClient.ts (AmbitClient class) as a structurally separate top-level directory from src/ (Ambit's own server-side domain code) rather than a second real npm package, per 'simplest/lowest blast radius' \u2014 reversible later if it needs to graduate. Closed two real gaps in the underlying API the SDK surfaced rather than working around them: (1) requestToken() previously only logged an audit entry when the anomaly detector fired \u2014 a normal submission left zero trace, which directly failed 'SDK usage is logged'; now every submission writes an unconditional request_submitted entry. (2) there was no way to check a request once it stopped being pending, and no link from an issued token back to the request that produced it \u2014 added GET /requests/:id and had approveRequest() write tokenId back onto the request, so the SDK can poll for a decision and then find its own token. Added optional idempotencyKey support (RequestStore.findByIdempotencyKey, scoped to (subject, key)) so the SDK's own capped-retry loop can safely retry a POST /requests call after a lost response without risking a duplicate request \u2014 required to satisfy CLAUDE.md's 'every external call gets a timeout and capped retries' + 'every side effect is idempotent' together, since those two rules would otherwise conflict on this exact call. Refactored server.ts to export `app` and only call app.listen() when run directly (import.meta.url check), so the SDK's own tests can drive the real Express app over a real ephemeral port without colliding with a live dev server on the fixed port \u2014 existing `npm run start` behavior unchanged. tsconfig.json's include list was missing sdk/ entirely at first (tsc --noEmit came back clean by silently skipping it, not because the code was actually right) \u2014 caught before commit and fixed. One real test-design bug caught during this story: the timeout test's fetch mock didn't respect the AbortSignal, so it never settled, which caused the client's await (and the test's own finally block) to hang \u2014 and because global fetch was never restored, the hang cascaded into the next two tests too. Fixed by making the mock reject on the signal's abort event, the same way a real hung connection would. Live-verified over real HTTP against the actual dev server (not just the test harness): GET /requests/:id for both an existing and unknown id, idempotent duplicate-key submission producing exactly one request and one request_submitted audit entry (not two), tokenId correctly linked after approval, and a standalone script importing AmbitClient exactly as an external developer would, running against the live server end-to-end (submit, poll by id, real 404 surfaced as a typed error).",
+      "updated_at": "2026-08-26T20:00:00Z",
       "verification": null
     },
     {

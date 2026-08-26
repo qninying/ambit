@@ -14,6 +14,14 @@ export interface PendingRequest extends TokenRequest {
   id: string;
   status: "pending" | "approved" | "denied";
   requestedAt: Date;
+  // Set once approveRequest() actually issues a token — the link a caller
+  // (the SDK, in particular) needs to go from "my request" to "my token"
+  // without a separate lookup path existing for that purpose.
+  tokenId?: string;
+  // Optional, caller-supplied. Lets requestToken() be safely retried (e.g.
+  // by the SDK's timeout-and-retry wrapper) without risking a duplicate
+  // pending request — see the idempotency check in requestToken() below.
+  idempotencyKey?: string;
 }
 
 export class UnknownRequestError extends Error {
@@ -35,16 +43,28 @@ export class RequestNotPendingError extends Error {
 }
 
 // REQ-016: every submission is checked for anomalies automatically, here —
-// not as a separate step a caller could forget to call. Only writes an audit
-// entry when something actually fires; a normal request produces no extra
-// entry, matching "no alert is triggered" literally.
+// not as a separate step a caller could forget to call. The anomaly check
+// only writes an audit entry when something actually fires; a normal request
+// produces no *anomaly* entry, matching "no alert is triggered" literally.
+// Every submission — anomalous or not — does write one unconditional
+// `request_submitted` entry (below), which is what makes SDK/API usage
+// genuinely traceable rather than only visible when something goes wrong.
 export function requestToken(
-  request: TokenRequest,
+  request: TokenRequest & { idempotencyKey?: string },
   requestStore: RequestStore,
   anomalyDetector: AnomalyDetector,
   auditLog: AuditLog,
   now: Date = new Date(),
 ): PendingRequest {
+  // Idempotency: a caller that retried the same (subject, idempotencyKey)
+  // pair — e.g. the SDK's timeout-and-retry wrapper, after a response was
+  // lost in flight — gets the request that already exists, not a second
+  // one. No new store entry, no second audit entry.
+  if (request.idempotencyKey) {
+    const existing = requestStore.findByIdempotencyKey(request.subject, request.idempotencyKey);
+    if (existing) return existing;
+  }
+
   const pending: PendingRequest = {
     ...request,
     id: crypto.randomUUID(),
@@ -52,6 +72,13 @@ export function requestToken(
     requestedAt: now,
   };
   requestStore.save(pending);
+
+  auditLog.record({
+    requestId: pending.id,
+    subject: request.subject,
+    action: "request_token",
+    decision: "request_submitted",
+  }, now);
 
   const anomaly = anomalyDetector.check(request.subject, request.scope, now);
   if (anomaly.anomalous) {
@@ -107,7 +134,7 @@ export function approveRequest(
     }
     throw err;
   }
-  requestStore.save({ ...pending, status: "approved" });
+  requestStore.save({ ...pending, status: "approved", tokenId: token.id });
   auditLog.record({
     requestId,
     tokenId: token.id,

@@ -52,13 +52,19 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 // POST /requests — submit a token request. Sits pending until an approver
 // acts on it; no token exists yet.
 app.post("/requests", (req, res) => {
-  const { subject, scope, ttlSeconds, policyId } = req.body ?? {};
+  const { subject, scope, ttlSeconds, policyId, idempotencyKey } = req.body ?? {};
   if (typeof subject !== "string" || !Array.isArray(scope) || typeof ttlSeconds !== "number") {
     res.status(400).json({ error: "subject (string), scope (string[]), and ttlSeconds (number) are required" });
     return;
   }
   const pending = requestToken(
-    { subject, scope, ttlSeconds, policyId: typeof policyId === "string" ? policyId : undefined },
+    {
+      subject,
+      scope,
+      ttlSeconds,
+      policyId: typeof policyId === "string" ? policyId : undefined,
+      idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : undefined,
+    },
     requestStore,
     anomalyDetector,
     auditLog,
@@ -70,6 +76,19 @@ app.post("/requests", (req, res) => {
 // on a human decision.
 app.get("/requests", (_req, res) => {
   res.json(requestStore.pending());
+});
+
+// GET /requests/:id — a single request, in any status. Needed by anything
+// that submits a request and then has to find out what happened to it (the
+// SDK, in particular) — GET /requests above only ever returns pending ones,
+// so it stops answering the moment a request is decided.
+app.get("/requests/:id", (req, res) => {
+  const pending = requestStore.get(req.params.id);
+  if (!pending) {
+    res.status(404).json({ error: `no such request "${req.params.id}"` });
+    return;
+  }
+  res.json(pending);
 });
 
 app.post("/requests/:id/approve", (req, res) => {
@@ -267,10 +286,18 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
   res.status(500).json({ error: "internal error" });
 });
 
-const port = Number(process.env.PORT) || 4000;
-const server = app.listen(port, () => {
-  console.log(`ambit server listening on :${port}`);
-});
+// Only bind a real port when this file is run directly (`npm run start`),
+// not when it's imported — the SDK's own tests import `app` and bind it to
+// an ephemeral port themselves, to exercise the real HTTP stack without
+// colliding with a live dev server on the same fixed port.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const port = Number(process.env.PORT) || 4000;
+  const server = app.listen(port, () => {
+    console.log(`ambit server listening on :${port}`);
+  });
 
-// Disposability (12-factor): shut down cleanly on SIGTERM rather than being killed hard.
-process.on("SIGTERM", () => server.close(() => process.exit(0)));
+  // Disposability (12-factor): shut down cleanly on SIGTERM rather than being killed hard.
+  process.on("SIGTERM", () => server.close(() => process.exit(0)));
+}
+
+export { app };

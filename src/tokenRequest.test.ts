@@ -32,13 +32,28 @@ describe("requestToken", () => {
     expect(requestStore.get(pending.id)).toEqual(pending);
   });
 
+  // Trust: every submission is traceable, not just anomalous ones — a
+  // normal request must still leave an unconditional audit entry.
+  it("logs an unconditional request_submitted entry for every submission", () => {
+    const { requestStore, anomalyDetector, auditLog } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+
+    expect(auditLog.entries()).toEqual([
+      expect.objectContaining({
+        requestId: pending.id,
+        subject: "agent-42",
+        decision: "request_submitted",
+      }),
+    ]);
+  });
+
   // Acceptance: "Given a normal request, when it is processed, then no alert
   // is triggered." — checked as an absence, not just an unasserted default.
   it("does not log an anomaly alert for a normal request", () => {
     const { requestStore, anomalyDetector, auditLog } = setup();
     requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
-    expect(auditLog.entries()).toHaveLength(0);
+    expect(auditLog.entries().some((e) => e.decision === "anomaly_detected")).toBe(false);
   });
 
   // Acceptance: "Given a token request, when it is anomalous, then an alert
@@ -52,7 +67,7 @@ describe("requestToken", () => {
       auditLog,
     );
 
-    expect(auditLog.entries()).toEqual([
+    expect(auditLog.entries()).toContainEqual(
       expect.objectContaining({
         requestId: pending.id,
         subject: "agent-42",
@@ -60,7 +75,50 @@ describe("requestToken", () => {
         decision: "anomaly_detected",
         reasonCode: "scope_too_broad",
       }),
-    ]);
+    );
+  });
+
+  // The idempotency guarantee the SDK's retry loop depends on: a second
+  // requestToken() call with the same (subject, idempotencyKey) must return
+  // the existing request, not create a duplicate or write a second
+  // request_submitted entry.
+  it("returns the existing request instead of creating a duplicate when the same idempotencyKey is reused", () => {
+    const { requestStore, anomalyDetector, auditLog } = setup();
+    const first = requestToken(
+      { subject: "agent-42", scope: ["email:send"], ttlSeconds: 300, idempotencyKey: "retry-1" },
+      requestStore,
+      anomalyDetector,
+      auditLog,
+    );
+    const second = requestToken(
+      { subject: "agent-42", scope: ["email:send"], ttlSeconds: 300, idempotencyKey: "retry-1" },
+      requestStore,
+      anomalyDetector,
+      auditLog,
+    );
+
+    expect(second).toEqual(first);
+    expect(requestStore.pending()).toHaveLength(1);
+    expect(auditLog.entries().filter((e) => e.decision === "request_submitted")).toHaveLength(1);
+  });
+
+  it("treats the same idempotencyKey from two different subjects as two separate requests", () => {
+    const { requestStore, anomalyDetector, auditLog } = setup();
+    const a = requestToken(
+      { subject: "agent-42", scope: ["email:send"], ttlSeconds: 300, idempotencyKey: "shared-key" },
+      requestStore,
+      anomalyDetector,
+      auditLog,
+    );
+    const b = requestToken(
+      { subject: "agent-99", scope: ["email:send"], ttlSeconds: 300, idempotencyKey: "shared-key" },
+      requestStore,
+      anomalyDetector,
+      auditLog,
+    );
+
+    expect(a.id).not.toBe(b.id);
+    expect(requestStore.pending()).toHaveLength(2);
   });
 
   // The request itself is still created — anomaly detection is a signal,
@@ -94,6 +152,18 @@ describe("approveRequest", () => {
     expect(requestStore.get(pending.id)?.status).toBe("approved");
   });
 
+  // The link the SDK needs to go from "my request" to "my token" — without
+  // this, GET /requests/:id after approval tells a caller *that* it was
+  // approved but not *what it got*.
+  it("records the issued token's id back onto the request once approved", () => {
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+
+    const token = approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
+
+    expect(requestStore.get(pending.id)?.tokenId).toBe(token.id);
+  });
+
   // Acceptance: "Trust: Approval actions are logged."
   it("logs the approval with the approver as actor", () => {
     const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
@@ -101,14 +171,14 @@ describe("approveRequest", () => {
 
     const token = approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
-    expect(auditLog.entries()).toEqual([
+    expect(auditLog.entries()).toContainEqual(
       expect.objectContaining({
         requestId: pending.id,
         tokenId: token.id,
         decision: "request_approved",
         actor: "approver-1",
       }),
-    ]);
+    );
   });
 
   // A policy-blocked approval is still a real event — it must leave an
@@ -177,14 +247,14 @@ describe("denyRequest", () => {
 
     denyRequest(pending.id, requestStore, auditLog, "approver-1", "scope_too_broad");
 
-    expect(auditLog.entries()).toEqual([
+    expect(auditLog.entries()).toContainEqual(
       expect.objectContaining({
         requestId: pending.id,
         decision: "request_denied",
         actor: "approver-1",
         reasonCode: "scope_too_broad",
       }),
-    ]);
+    );
   });
 
   it("refuses to deny an unknown request id", () => {
