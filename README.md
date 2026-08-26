@@ -29,7 +29,7 @@ sequence land in the Audit Log with its chain-verified badge.
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **122 tests passing.**
+in a unit test. Current count: **125 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -42,6 +42,12 @@ in a unit test. Current count: **122 tests passing.**
   not accepted), its expiry is capped to its parent's regardless of what TTL
   was requested, and revoking a token cascades recursively through every
   descendant it delegated to, multi-level.
+- Every denial from the Enforcement Gateway carries a genuinely detailed
+  message, not just a terse code — citing the token's real scope for
+  `out_of_scope`, its real issue/expiry timestamps for `expired`, and the
+  real time and reason it was revoked for `revoked`. An allowed decision
+  carries no message field at all. The audit log records the same detail,
+  not just the code.
 
 **Human oversight**
 - Every token request sits pending until a human approves or denies it via

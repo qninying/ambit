@@ -132,7 +132,11 @@ describe("revokeToken cascading", () => {
 
     expect(store.get(childDecision.token.id)?.status).toBe("revoked");
     const decision = enforceToken(childDecision.token.id, "email:send", store, auditLog);
-    expect(decision).toEqual({ allowed: false, reasonCode: "revoked" });
+    expect(decision).toEqual({
+      allowed: false,
+      reasonCode: "revoked",
+      message: expect.stringContaining("parent_revoked"),
+    });
   });
 
   it("cascades through multiple generations — a sub-subagent's token is revoked too", () => {

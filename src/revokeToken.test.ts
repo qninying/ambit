@@ -19,7 +19,27 @@ describe("revokeToken", () => {
     revokeToken(token.id, store, auditLog, "compromised");
     const decision = enforceToken(token.id, "email:send", store, auditLog);
 
-    expect(decision).toEqual({ allowed: false, reasonCode: "revoked" });
+    expect(decision).toEqual({
+      allowed: false,
+      reasonCode: "revoked",
+      message: expect.stringContaining("compromised"),
+    });
+  });
+
+  // Acceptance: "Given a rejected token, when it is used, then a detailed
+  // error message is returned." — for revocation specifically, "detailed"
+  // means citing when it was revoked and why, not just "revoked" again.
+  it("cites the real revocation time and reason in the denial message", () => {
+    const { store, auditLog } = setup();
+    const token = issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
+    const revokedAt = new Date("2026-01-01T00:00:00.000Z");
+
+    revokeToken(token.id, store, auditLog, "policy_violation", revokedAt);
+    const decision = enforceToken(token.id, "email:send", store, auditLog);
+
+    if (decision.allowed) throw new Error("expected a denial");
+    expect(decision.message).toContain(revokedAt.toISOString());
+    expect(decision.message).toContain("policy_violation");
   });
 
   // Acceptance: "Given a revoked token, when it is used, then the action is

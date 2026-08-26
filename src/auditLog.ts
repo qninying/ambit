@@ -37,6 +37,11 @@ export interface AuditLogEntry {
     | "circuit_opened"
     | "circuit_closed";
   reasonCode?: string;
+  // REQ-018: the detailed, human-readable explanation behind a denial —
+  // present only on denials, matching "no error message is returned" for
+  // an allowed decision. reasonCode stays for programmatic branching;
+  // this is for the developer/administrator reading the trail.
+  message?: string;
   // Who performed a human-driven action (an approver), as opposed to
   // `subject`, which is the AI agent the token is for.
   actor?: string;

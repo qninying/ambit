@@ -34,6 +34,12 @@ export interface Token {
   expiresAt: Date;
   status: "active" | "revoked";
   parentTokenId?: string;
+  // REQ-018: set only by revokeToken()/cascadeRevoke() — carried on the
+  // token record itself (not reconstructed from the audit log later) so
+  // enforceToken's detailed denial message can cite exactly when and why,
+  // consistent with the store being the single source of truth (ADR-001).
+  revokedAt?: Date;
+  revocationReason?: RevocationReason;
 }
 
 export class InvalidScopeError extends Error {
@@ -113,9 +119,19 @@ export function issueToken(request: TokenRequest, store: TokenStore, policyStore
 // Enforcement Gateway. REQ-006 (guardrail): deny, never allow, when validity
 // or scope cannot be confirmed — every branch below ends in a denial except
 // the one that positively confirms all three.
+// REQ-018: every denial carries `message` — a genuinely detailed, human-
+// readable explanation citing the actual token's data (its real scope, its
+// real expiry, when and why it was revoked), not just the terse reasonCode.
+// `reasonCode` stays for programmatic branching; `message` is new and is
+// for the developer reading it. A valid token's decision has no `message`
+// at all — not an empty string — matching "no error message is returned."
 export type EnforcementDecision =
   | { allowed: true }
-  | { allowed: false; reasonCode: "revoked" | "expired" | "out_of_scope" | "unknown_token" | "store_unavailable" };
+  | {
+      allowed: false;
+      reasonCode: "revoked" | "expired" | "out_of_scope" | "unknown_token" | "store_unavailable";
+      message: string;
+    };
 
 // Takes an id, not a Token — every call re-reads current state from the
 // store, so a revocation that happened a moment ago is guaranteed to be seen
@@ -137,15 +153,17 @@ export function enforceToken(
     // never throw. enforceToken's contract is "always a decision," and a
     // store outage doesn't get to be the exception to that.
     if (err instanceof CircuitOpenError) {
-      auditLog.record({ tokenId, subject: "unknown", action, decision: "denied", reasonCode: "store_unavailable" }, now);
-      return { allowed: false, reasonCode: "store_unavailable" };
+      const message = `The Policy & Token Store is currently unreachable (circuit breaker open) — token "${tokenId}" could not be validated, so the request was denied by default rather than allowed on unconfirmed data.`;
+      auditLog.record({ tokenId, subject: "unknown", action, decision: "denied", reasonCode: "store_unavailable", message }, now);
+      return { allowed: false, reasonCode: "store_unavailable", message };
     }
     throw err;
   }
   if (!token) {
     // Can't confirm validity at all — the guardrail says deny, not throw.
-    auditLog.record({ tokenId, subject: "unknown", action, decision: "denied", reasonCode: "unknown_token" }, now);
-    return { allowed: false, reasonCode: "unknown_token" };
+    const message = `No token found with id "${tokenId}" — either it was never issued, the id is incorrect, or this process has restarted since it was issued (state is in-memory and does not persist across restarts — see ADR-006).`;
+    auditLog.record({ tokenId, subject: "unknown", action, decision: "denied", reasonCode: "unknown_token", message }, now);
+    return { allowed: false, reasonCode: "unknown_token", message };
   }
 
   const decision = decide(token, action, now);
@@ -155,19 +173,36 @@ export function enforceToken(
     action,
     decision: decision.allowed ? "allowed" : "denied",
     reasonCode: decision.allowed ? undefined : decision.reasonCode,
+    message: decision.allowed ? undefined : decision.message,
   }, now);
   return decision;
 }
 
 function decide(token: Token, action: string, now: Date): EnforcementDecision {
   if (token.status !== "active") {
-    return { allowed: false, reasonCode: "revoked" };
+    const revokedWhen = token.revokedAt ? token.revokedAt.toISOString() : "an unknown time";
+    const revokedWhy = token.revocationReason
+      ? ` with reason "${token.revocationReason}"${token.revocationReason === "parent_revoked" ? " (a token it was delegated from was revoked)" : ""}`
+      : "";
+    return {
+      allowed: false,
+      reasonCode: "revoked",
+      message: `Token "${token.id}" (subject "${token.subject}") was revoked at ${revokedWhen}${revokedWhy} and can no longer be used.`,
+    };
   }
   if (now.getTime() >= token.expiresAt.getTime()) {
-    return { allowed: false, reasonCode: "expired" };
+    return {
+      allowed: false,
+      reasonCode: "expired",
+      message: `Token "${token.id}" (subject "${token.subject}") expired at ${token.expiresAt.toISOString()} — it was issued at ${token.issuedAt.toISOString()} with a ${Math.round((token.expiresAt.getTime() - token.issuedAt.getTime()) / 1000)}s TTL. The current time is ${now.toISOString()}. Request a new token to continue.`,
+    };
   }
   if (!token.scope.includes(action)) {
-    return { allowed: false, reasonCode: "out_of_scope" };
+    return {
+      allowed: false,
+      reasonCode: "out_of_scope",
+      message: `Token "${token.id}" (subject "${token.subject}") is scoped to [${token.scope.join(", ")}] and does not include "${action}". Request a token with broader scope, or delegate from a token that has it.`,
+    };
   }
   return { allowed: true };
 }
@@ -176,7 +211,7 @@ function decide(token: Token, action: string, now: Date): EnforcementDecision {
 // request cycle. This is where that becomes true: revocation writes straight
 // into the store, so the very next enforceToken() lookup by the same id sees
 // "revoked" — there's no window where a stale in-flight copy still works.
-export type RevocationReason = "compromised" | "no_longer_needed" | "policy_violation" | "superseded";
+export type RevocationReason = "compromised" | "no_longer_needed" | "policy_violation" | "superseded" | "parent_revoked";
 
 export function revokeToken(
   tokenId: string,
@@ -190,7 +225,7 @@ export function revokeToken(
     throw new UnknownTokenError(`cannot revoke token "${tokenId}" — no such token was issued`);
   }
 
-  const revoked: Token = { ...token, status: "revoked" };
+  const revoked: Token = { ...token, status: "revoked", revokedAt: now, revocationReason: reasonCode };
   store.save(revoked);
   auditLog.record({
     tokenId,
@@ -212,7 +247,7 @@ export function revokeToken(
 function cascadeRevoke(parentId: string, store: TokenStore, auditLog: AuditLog, now: Date): void {
   for (const child of store.childrenOf(parentId)) {
     if (child.status !== "active") continue; // already revoked — don't double-log
-    const revokedChild: Token = { ...child, status: "revoked" };
+    const revokedChild: Token = { ...child, status: "revoked", revokedAt: now, revocationReason: "parent_revoked" };
     store.save(revokedChild);
     auditLog.record({
       tokenId: child.id,

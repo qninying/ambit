@@ -58,7 +58,11 @@ describe("REQ-008: fail-closed circuit breaker, wired into the real call paths",
     expect(breaker.state()).toBe("open");
 
     const decision = enforceToken("some-token-id", "email:send", tokenStore, auditLog);
-    expect(decision).toEqual({ allowed: false, reasonCode: "store_unavailable" });
+    expect(decision).toEqual({
+      allowed: false,
+      reasonCode: "store_unavailable",
+      message: expect.stringContaining("some-token-id"),
+    });
     expect(auditLog.entries()).toContainEqual(
       expect.objectContaining({ decision: "denied", reasonCode: "store_unavailable" }),
     );

@@ -479,21 +479,33 @@
       "criteria": [
         {
           "text": "Given a rejected token, when it is used, then a detailed error message is returned.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given a valid token, when it is used, then no error message is returned.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust: Error message actions are logged.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
-      "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "files_touched": [
+        "src/token.ts",
+        "src/token.test.ts",
+        "src/revokeToken.test.ts",
+        "src/delegation.test.ts",
+        "src/circuitBreakerIntegration.test.ts",
+        "src/auditLog.ts",
+        "adr/ADR-009-trust-boundary-hardening-deferred-to-post-platform-phase.md"
+      ],
+      "tests_added": [
+        "enforceToken > gives a detailed, specific message for each denial reason \u2014 not just a bare code",
+        "enforceToken > returns no message field at all for an allowed decision",
+        "revokeToken > cites the real revocation time and reason in the denial message"
+      ],
+      "notes": "REQ-018's three named examples (out of scope, expired, revoked) map directly to enforceToken's existing reasonCode values (already built in STORY-001/002) \u2014 what was actually missing was a genuinely detailed, human-readable `message` alongside the terse code, not the underlying signal itself. Extended EnforcementDecision's denial variant with `message: string`, built from the real token's own data per reason: out_of_scope cites the token's actual scope list and the requested action; expired cites real issuedAt/expiresAt/TTL/now; revoked cites the real revokedAt time and revocationReason. To make the revoked message genuinely detailed (not just 'revoked' again), extended `Token` itself with `revokedAt?`/`revocationReason?` (optional, set only by revokeToken()/cascadeRevoke()) rather than reconstructing that fact from the audit log at read time -- keeps the store the single source of truth per ADR-001. Added 'parent_revoked' to the RevocationReason union (it was already being passed as a bare string to the audit log's reasonCode by cascadeRevoke(), just not part of the typed union) -- confirmed it stays correctly excluded from POST /tokens/:id/revoke's human-facing reasonCode whitelist, since a caller revoking a token directly should never claim 'parent was revoked' as their own reason. Also added `message?: string` to AuditLogEntry and populated it on every denial, so the audit trail carries the same detail a live caller saw, not just the terse reasonCode -- an administrator reviewing history later gets equal information to someone watching it happen live. Deliberately scoped to enforceToken only, not delegateToken's DelegationDecision -- REQ-018's three named examples (out of scope, expired, revoked) are enforceToken's reasons specifically; delegation's denial reasons (parent_invalid, empty_scope, exceeds_parent_scope, not_narrower) are a different concept (a request to create a token being rejected, not an existing token being rejected) and weren't named by the requirement, so left out to avoid inventing scope. Per the new standing post-story review rule: checked whether the new detailed messages create a fresh information-disclosure gap given every enforce route stays unauthenticated (ADR-009) -- they don't; GET /tokens (already unauthenticated, already tracked) already exposes every token's full record including the two new fields, so nothing new is disclosed. Did fix one real, free wording-honesty issue found during the review: the unknown_token message originally claimed 'no record of it ever existing,' which overstates what's actually true given ADR-006's in-memory, resets-on-restart persistence -- corrected to name that possibility explicitly rather than imply certainty the system doesn't have. Amended ADR-009 with a short note recording this review's finding (widened, not new).",
+      "updated_at": "2026-08-26T21:45:00Z",
       "verification": null
     },
     {

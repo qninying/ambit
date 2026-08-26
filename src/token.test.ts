@@ -158,13 +158,18 @@ describe("enforceToken", () => {
 
     const decision = enforceToken(token.id, "payment:charge", store, auditLog);
 
-    expect(decision).toEqual({ allowed: false, reasonCode: "out_of_scope" });
+    expect(decision).toEqual({
+      allowed: false,
+      reasonCode: "out_of_scope",
+      message: expect.stringContaining('does not include "payment:charge"'),
+    });
     expect(auditLog.entries()).toEqual([
       expect.objectContaining({
         tokenId: token.id,
         action: "payment:charge",
         decision: "denied",
         reasonCode: "out_of_scope",
+        message: expect.stringContaining('does not include "payment:charge"'),
       }),
     ]);
   });
@@ -176,7 +181,41 @@ describe("enforceToken", () => {
 
     const decision = enforceToken(token.id, "email:send", store, auditLog, afterExpiry);
 
-    expect(decision).toEqual({ allowed: false, reasonCode: "expired" });
+    expect(decision).toEqual({
+      allowed: false,
+      reasonCode: "expired",
+      message: expect.stringContaining(token.expiresAt.toISOString()),
+    });
+  });
+
+  // Acceptance: "Given a rejected token, when it is used, then a detailed
+  // error message is returned." — a bare reasonCode isn't enough; the
+  // message must cite real, specific facts about the token itself.
+  it("gives a detailed, specific message for each denial reason — not just a bare code", () => {
+    const { store, auditLog } = setup();
+    const token = issueToken({ subject: "agent-42", scope: ["email:send", "sms:send"], ttlSeconds: 300 }, store);
+
+    const decision = enforceToken(token.id, "payment:charge", store, auditLog);
+
+    if (decision.allowed) throw new Error("expected a denial");
+    expect(decision.message).toContain(token.id);
+    expect(decision.message).toContain("agent-42");
+    expect(decision.message).toContain("email:send");
+    expect(decision.message).toContain("sms:send");
+    expect(decision.message.length).toBeGreaterThan(40); // genuinely detailed, not a restated code
+  });
+
+  // Acceptance: "Given a valid token, when it is used, then no error
+  // message is returned." — checked as a real absence, not an empty string.
+  it("returns no message field at all for an allowed decision", () => {
+    const { store, auditLog } = setup();
+    const token = issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
+
+    const decision = enforceToken(token.id, "email:send", store, auditLog);
+
+    expect(decision).toEqual({ allowed: true });
+    expect("message" in decision).toBe(false);
+    expect(auditLog.entries()[0]?.message).toBeUndefined();
   });
 
   // Failure path: "Revocation status check fails" (STORY-002) generalizes to
@@ -186,9 +225,18 @@ describe("enforceToken", () => {
 
     const decision = enforceToken("not-a-real-id", "email:send", store, auditLog);
 
-    expect(decision).toEqual({ allowed: false, reasonCode: "unknown_token" });
+    expect(decision).toEqual({
+      allowed: false,
+      reasonCode: "unknown_token",
+      message: expect.stringContaining("not-a-real-id"),
+    });
     expect(auditLog.entries()).toEqual([
-      expect.objectContaining({ tokenId: "not-a-real-id", decision: "denied", reasonCode: "unknown_token" }),
+      expect.objectContaining({
+        tokenId: "not-a-real-id",
+        decision: "denied",
+        reasonCode: "unknown_token",
+        message: expect.stringContaining("not-a-real-id"),
+      }),
     ]);
   });
 });
