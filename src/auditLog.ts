@@ -3,6 +3,15 @@
 // (reason-coded denials) and STORY-002's "revocation logged with a reason
 // code" are both instances of the same underlying need: one durable record
 // of what happened to a token and why, not two separate logs to cross-check.
+//
+// "Immutable" was previously just a comment on entries() returning a copy —
+// nothing detected if the underlying data had actually been altered. Each
+// entry's hash now covers its own content plus the previous entry's hash
+// (same principle as a certificate transparency log), so altering any entry
+// breaks the hash of every entry after it. Node's built-in `crypto`, no new
+// dependency.
+
+import { createHash } from "node:crypto";
 
 export interface AuditLogEntry {
   id: string;
@@ -33,20 +42,65 @@ export interface AuditLogEntry {
   // the attempt. A gateway can allow an action that then fails to reach its
   // target; those are two different facts, logged as two entries.
   outcome?: "success" | "unreachable";
+  // Chain fields — null previousHash marks the genesis entry. hash covers
+  // every other field on this entry (including previousHash), computed by
+  // computeEntryHash() below.
+  previousHash: string | null;
+  hash: string;
+}
+
+export function computeEntryHash(entry: Omit<AuditLogEntry, "hash">): string {
+  return createHash("sha256").update(JSON.stringify(entry)).digest("hex");
+}
+
+export interface ChainVerification {
+  valid: boolean;
+  brokenAtId: string | null;
+  entriesChecked: number;
+}
+
+// A pure function over any entry array — not a method reading private
+// state — so it can verify the real log's entries() output, or a
+// deliberately-tampered array in a test, and report exactly which entry the
+// chain breaks at rather than just "somewhere."
+export function verifyAuditChain(entries: readonly AuditLogEntry[]): ChainVerification {
+  let expectedPrevious: string | null = null;
+  for (const entry of entries) {
+    const { hash, ...rest } = entry;
+    if (rest.previousHash !== expectedPrevious || computeEntryHash(rest) !== hash) {
+      return { valid: false, brokenAtId: entry.id, entriesChecked: entries.length };
+    }
+    expectedPrevious = hash;
+  }
+  return { valid: true, brokenAtId: null, entriesChecked: entries.length };
 }
 
 export class AuditLog {
   #entries: AuditLogEntry[] = [];
 
-  record(entry: Omit<AuditLogEntry, "id" | "occurredAt">, now: Date = new Date()): AuditLogEntry {
-    const full: AuditLogEntry = { id: crypto.randomUUID(), occurredAt: now, ...entry };
+  record(entry: Omit<AuditLogEntry, "id" | "occurredAt" | "previousHash" | "hash">, now: Date = new Date()): AuditLogEntry {
+    const previousHash = this.#entries.length > 0 ? this.#entries[this.#entries.length - 1]!.hash : null;
+    const withoutHash: Omit<AuditLogEntry, "hash"> = {
+      id: crypto.randomUUID(),
+      occurredAt: now,
+      previousHash,
+      ...entry,
+    };
+    const full: AuditLogEntry = { ...withoutHash, hash: computeEntryHash(withoutHash) };
     this.#entries.push(full);
     return full;
   }
 
   // Returns a copy, not the live array — callers can read the trail but can't
-  // mutate or truncate it, which is what "immutable" means for an audit log.
+  // mutate or truncate it. The hash chain is what makes tampering with that
+  // copy (or with a compromised process's memory) *detectable*, which is
+  // what "immutable" actually has to mean for an audit log, not just that
+  // this one method happens to return a new array.
   entries(): readonly AuditLogEntry[] {
     return [...this.#entries];
+  }
+
+  verify(): ChainVerification {
+    return verifyAuditChain(this.#entries);
   }
 }

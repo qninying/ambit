@@ -432,13 +432,33 @@ async function savePolicy(policyId, slot) {
 
 function renderAudit(main) {
   main.innerHTML = `
-    <div class="field" style="max-width:320px; margin-bottom:14px;">
-      <input id="audit-filter" placeholder="Filter by subject, action, or reason…" />
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:14px; flex-wrap:wrap;">
+      <div class="field" style="max-width:320px; margin-bottom:0;">
+        <input id="audit-filter" placeholder="Filter by subject, action, or reason…" />
+      </div>
+      <div id="chain-status" style="font-size:12.5px;">Checking chain integrity…</div>
     </div>
     <div class="panel"><div class="panel-body" id="audit-body"></div></div>
   `;
   document.getElementById("audit-filter").addEventListener("input", (e) => renderAuditRows(e.target.value));
   renderAuditRows("");
+  renderChainStatus();
+}
+
+// Fetched on demand, not part of the polled STATE — walking the whole hash
+// chain on every 4s tick regardless of which tab is open would be wasted
+// work. This is the live, demonstrable proof that "immutable" is a real,
+// checkable property here, not just a claim in a comment.
+async function renderChainStatus() {
+  const el = document.getElementById("chain-status");
+  try {
+    const result = await fetchJson("/audit-log/verify");
+    el.innerHTML = result.valid
+      ? `<span class="badge badge-ok"><span class="dot"></span>Chain verified — ${result.entriesChecked} ${result.entriesChecked === 1 ? "entry" : "entries"}</span>`
+      : `<span class="badge badge-danger"><span class="dot"></span>Chain broken at entry ${esc(result.brokenAtId)}</span>`;
+  } catch (err) {
+    el.textContent = "";
+  }
 }
 
 function renderAuditRows(filter) {

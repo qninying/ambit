@@ -251,6 +251,12 @@ app.get("/audit-log", (_req, res) => {
   res.json(auditLog.entries());
 });
 
+// Proves the log is tamper-evident, not just labelled immutable — walks the
+// real hash chain and reports exactly which entry it breaks at, if any.
+app.get("/audit-log/verify", (_req, res) => {
+  res.json(auditLog.verify());
+});
+
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err instanceof InvalidScopeError || err instanceof PolicyViolationError) {
     res.status(400).json({ error: err.message });
