@@ -1,0 +1,466 @@
+{
+  "schema_version": 2,
+  "project": "Ambit",
+  "totals": {
+    "stories_total": 13,
+    "stories_verified": 0,
+    "stories_submitted": 0,
+    "stories_in_progress": 0,
+    "stories_not_started": 13,
+    "criteria_total": 0,
+    "criteria_passed": 0,
+    "points_awarded": 804
+  },
+  "stories": [
+    {
+      "id": "STORY-000",
+      "release": null,
+      "acceptance_total": 5,
+      "criteria": [
+        {
+          "text": "Given the Command Center, when it is opened, then every tab is reachable and every card drills down one level.",
+          "passed": false
+        },
+        {
+          "text": "Given sample mode, when any tab is shown, then the sample data is visibly labelled as sample.",
+          "passed": false
+        },
+        {
+          "text": "Given the Command Center, when any tab renders, then .colaberry/plan.json and .colaberry/progress.json are both committed in this repo and every tab reads its content from them at runtime rather than from hard-coded values.",
+          "passed": false
+        },
+        {
+          "text": "Given the Command Center, when any tab is shown, then .colaberry/manifest.json is committed in this repo and every tab shows how old that data is and warns when the age exceeds a week.",
+          "passed": false
+        },
+        {
+          "text": "Trust — no tab shows a number, a connection or a result the project has not actually produced.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-001",
+      "release": "r0",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a token request, when it is approved, then the token is issued and enforced.",
+          "passed": false
+        },
+        {
+          "text": "Given a revoked token, when it is used, then the action is blocked.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Every action is logged in the Audit Log.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-002",
+      "release": "r0",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a token, when it is revoked, then its next call fails immediately.",
+          "passed": false
+        },
+        {
+          "text": "Given a revoked token, when it is used, then the action is blocked.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Revocation is logged with a reason code.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-003",
+      "release": "r1",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a token request, when it is displayed, then the approver can approve or deny it.",
+          "passed": false
+        },
+        {
+          "text": "Given a denied request, when it is submitted, then the token is not issued.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Approval actions are logged.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-004",
+      "release": "r1",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a subagent request, when it is processed, then it inherits a subset of the parent's scope.",
+          "passed": false
+        },
+        {
+          "text": "Given a subagent request, when it exceeds the parent's scope, then it is denied.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Delegation actions are logged.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-005",
+      "release": "r2",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a valid token, when the token is used to access a mock endpoint, then the action is allowed.",
+          "passed": false
+        },
+        {
+          "text": "Given an invalid token, when the token is used to access a mock endpoint, then the action is denied.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Given any token, when the token is used, then the action and its outcome are logged in the Audit Log.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-006",
+      "release": "r2",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a token request, when it is anomalous, then an alert is triggered.",
+          "passed": false
+        },
+        {
+          "text": "Given a normal request, when it is processed, then no alert is triggered.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Anomaly detection actions are logged.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-007",
+      "release": "r3",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a policy, when it is created, then it defines token scopes and constraints.",
+          "passed": false
+        },
+        {
+          "text": "Given a policy, when it is modified, then changes are applied.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Policy actions are logged.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-008",
+      "release": "r3",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a developer, when they use the SDK, then they can request a token.",
+          "passed": false
+        },
+        {
+          "text": "Given a token request, when it is invalid, then an error is returned.",
+          "passed": false
+        },
+        {
+          "text": "Trust: SDK usage is logged.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-009",
+      "release": "r4",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given the Policy & Token Store is unreachable, when a request is made, then it is denied.",
+          "passed": false
+        },
+        {
+          "text": "Given the Store is reachable, when a request is made, then it is processed.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Circuit-breaker actions are logged.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-010",
+      "release": "r4",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a rejected token, when it is used, then a detailed error message is returned.",
+          "passed": false
+        },
+        {
+          "text": "Given a valid token, when it is used, then no error message is returned.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Error message actions are logged.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-011",
+      "release": "r4",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a request for customer data, when the data is accessed, then sensitive fields are redacted.",
+          "passed": false
+        },
+        {
+          "text": "Given a request for customer data, when the request lacks proper authorization, then access is denied.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Given any data access, when the data is accessed, then the access and redaction actions are logged in the Audit Log.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": 67,
+        "outstanding": []
+      }
+    },
+    {
+      "id": "STORY-012",
+      "release": "r4",
+      "acceptance_total": 3,
+      "criteria": [
+        {
+          "text": "Given a denied action, when the action is logged, then a distinct reason code is recorded.",
+          "passed": false
+        },
+        {
+          "text": "Given a denied action due to token expiration, when the action is logged, then the reason code indicates token expiration.",
+          "passed": false
+        },
+        {
+          "text": "Trust: Given any denied action, when the action is logged, then the reason code is included in the Audit Log.",
+          "passed": false
+        }
+      ],
+      "files_touched": [],
+      "tests_added": [],
+      "notes": null,
+      "updated_at": null,
+      "verification": {
+        "state": "not_started",
+        "criteria_passed": 0,
+        "criteria_total": 0,
+        "verified_at": null,
+        "commit_sha": null,
+        "commit_url": null,
+        "commit_at": null,
+        "points_awarded": null,
+        "outstanding": []
+      }
+    }
+  ]
+}
