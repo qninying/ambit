@@ -14,3 +14,4 @@ actually considered and why they were rejected, not just the choice made.
 | [006](ADR-006-in-memory-persistence-now.md) | In-memory persistence now, deliberately, with a same-interface graduation path — not an oversight | Running theme |
 | [007](ADR-007-single-tabbed-console-enterprise-density.md) | Single tabbed console, enterprise-density design — rejected a consumer-app/map-centric framing as a domain mismatch | STORY-007 |
 | [008](ADR-008-hash-chained-tamper-evident-audit-log.md) | Hash-chained, tamper-evident audit log — "immutable" made checkable, not just claimed in a comment | Post-STORY-007 |
+| [009](ADR-009-trust-boundary-hardening-deferred-to-post-platform-phase.md) | No caller authentication, no verified approver identity, no token possession proof — named explicitly, bundled with real persistence, deferred to a dedicated phase after STORY-012 rather than left implicit | Post-STORY-008 |
