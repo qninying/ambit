@@ -193,7 +193,7 @@ function renderRequests(main) {
     <div class="panel">
       <div class="panel-header"><h3>Submit a test request</h3></div>
       <div class="panel-body padded">
-        <p class="page-desc" style="margin:0 0 12px;">Stands in for the client SDK (not built yet) — a real agent would submit this programmatically.</p>
+        <p class="page-desc" style="margin:0 0 12px;">Stands in for the client SDK — a real agent would submit this programmatically via <code>sdk/ambitClient.ts</code>.</p>
         <div class="form-row">
           <div class="field"><label>Subject</label><input id="req-subject" placeholder="agent-42" /></div>
           <div class="field"><label>Scope (comma-separated)</label><input id="req-scope" placeholder="email:send, crm:read" /></div>
