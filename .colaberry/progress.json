@@ -515,21 +515,51 @@
       "criteria": [
         {
           "text": "Given a request for customer data, when the data is accessed, then sensitive fields are redacted.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given a request for customer data, when the request lacks proper authorization, then access is denied.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust: Given any data access, when the data is accessed, then the access and redaction actions are logged in the Audit Log.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
-      "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "files_touched": [
+        "src/customerData.ts",
+        "src/customerData.test.ts",
+        "src/redaction.ts",
+        "src/redaction.test.ts",
+        "src/customerDataAccess.ts",
+        "src/customerDataAccess.test.ts",
+        "src/auditLog.ts",
+        "src/server.ts"
+      ],
+      "tests_added": [
+        "CustomerDataRegistry > returns a seeded customer record by id",
+        "CustomerDataRegistry > returns undefined for an unknown customer id",
+        "CustomerDataRegistry > accepts a custom seed instead of the default one",
+        "createRedactionRule > creates a rule with the given sensitive fields and logs it",
+        "createRedactionRule > refuses to create a rule with no sensitive fields",
+        "createRedactionRule > refuses to create a rule where a field's required scope is empty",
+        "createRedactionRule > refuses to create a rule with no name",
+        "applyRedaction > redacts sensitive fields the token's scope does not grant",
+        "applyRedaction > leaves fields not named in the rule untouched, regardless of scope",
+        "applyRedaction > un-redacts exactly the fields whose required scope is present",
+        "applyRedaction > redacts nothing when the token has every required scope",
+        "applyRedaction > does not mutate the original record",
+        "accessCustomerData > allows access and redacts fields the token's scope doesn't grant",
+        "accessCustomerData > un-redacts exactly the fields the token has elevated scope for",
+        "accessCustomerData > denies access when the token lacks the customer:read scope, and never reaches the customer registry",
+        "accessCustomerData > denies access for an unknown token id",
+        "accessCustomerData > denies access for an unknown customer id, even with a fully valid, authorized token",
+        "accessCustomerData > fails closed when the redaction rule id cannot be resolved, rather than returning unredacted data",
+        "accessCustomerData > logs both the access decision and the redaction outcome as two separate entries",
+        "accessCustomerData > logs a denial (and nothing else) when access is refused, with no data_accessed entry"
+      ],
+      "notes": "Ambit had no 'customer' concept anywhere before this story. Built three new modules: customerData.ts (a small deterministic in-memory CustomerDataRegistry, same 'mock but real' treatment as STORY-005's MockEndpointRegistry), redaction.ts (RedactionRule mapping each sensitive field to the SPECIFIC scope required to see it unredacted -- not a blanket allow/deny -- plus createRedactionRule() validated the same way Policy is, which is what gives 'redaction rule misconfiguration' real testable meaning: an empty sensitiveFields map or a field mapped to an empty-string scope is rejected at creation), and customerDataAccess.ts (the access layer, mirroring mockEndpointAccess.ts's shape: reuses enforceToken as-is for the coarse authorization gate -- nothing about REQ-004/006/018's guardrails reimplemented -- then applies redaction only once that gate says yes). The one real security judgment call: if an explicitly-given redactionRuleId doesn't resolve, the whole request is DENIED, not silently returned unredacted -- fail-closed on the side of protecting the data, same guardrail philosophy as every other 'can't confirm -> deny' decision in this codebase (unknown_token, store_unavailable). Logs two separate audit entries per successful access (the enforceToken 'allowed' decision, and a new 'data_accessed' entry carrying which fields were actually redacted this time) -- ADR-005's 'decision separate from outcome' pattern applied to a new context. Added POST/GET /redaction-rules and POST /tokens/:id/customer-data/:customerId to server.ts, plus one seeded default rule ('Standard Customer PII': ssn/email/phone gated behind their own sub-scopes) so a demo has something to check against without a setup step. Deliberately did NOT extend storeCircuitBreaker (REQ-008) to this new data -- REQ-008 names 'Policy & Token Store' specifically, and stretching it to cover this unrelated dataset would have been scope creep, not thoroughness. No PATCH /redaction-rules route -- this story's acceptance criteria don't ask for 'modified rule, changes are applied' the way STORY-007 did for policies, so that surface wasn't built. No Console UI -- matches how STORY-002/004 treated non-human-facing operations, nothing in this story's acceptance criteria asks for one.",
+      "updated_at": "2026-08-30T22:30:00Z",
       "verification": null
     },
     {

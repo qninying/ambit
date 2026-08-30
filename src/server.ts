@@ -17,6 +17,9 @@ import { TokenStore } from "./tokenStore.js";
 import { MockEndpointRegistry, type MockSystem } from "./mockEndpoints.js";
 import { accessMockEndpoint } from "./mockEndpointAccess.js";
 import { InvalidPolicyError, PolicyStore, UnknownPolicyError, createPolicy, modifyPolicy } from "./policy.js";
+import { CustomerDataRegistry } from "./customerData.js";
+import { InvalidRedactionRuleError, RedactionRuleStore, createRedactionRule } from "./redaction.js";
+import { accessCustomerData } from "./customerDataAccess.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -65,6 +68,30 @@ const accessConfig = {
   maxAttempts: envNumber("ACCESS_MAX_ATTEMPTS"),
   retryDelayMs: envNumber("ACCESS_RETRY_DELAY_MS"),
 };
+
+// REQ-009: customer data + redaction. Deliberately NOT wired to
+// storeCircuitBreaker — REQ-008 names "Policy & Token Store" specifically;
+// extending the breaker's scope to this unrelated dataset wasn't asked for
+// and would be scope creep, not thoroughness.
+const customerDataRegistry = new CustomerDataRegistry();
+const redactionRuleStore = new RedactionRuleStore();
+// A real deployment would let a data privacy officer author this through
+// POST /redaction-rules like any other rule; a demo needs at least one to
+// exist by default so "access customer data" has something to check
+// against without a setup step first.
+const defaultRedactionRule = createRedactionRule(
+  {
+    name: "Standard Customer PII",
+    sensitiveFields: {
+      ssn: "customer:read:ssn",
+      email: "customer:read:email",
+      phone: "customer:read:phone",
+    },
+  },
+  "system",
+  redactionRuleStore,
+  auditLog,
+);
 
 const app = express();
 app.use(express.json());
@@ -336,6 +363,56 @@ app.patch("/policies/:id", (req, res) => {
       throw err;
     }
   }
+});
+
+// REQ-009: field-level redaction rules. POST-only (no PATCH) — this
+// story's acceptance criteria don't ask for "modified rule, changes are
+// applied" the way STORY-007 did for policies, so that surface wasn't
+// built; a new rule is how a mistaken one gets superseded for now.
+app.post("/redaction-rules", (req, res) => {
+  const { name, sensitiveFields, authoredBy } = req.body ?? {};
+  if (typeof name !== "string" || typeof sensitiveFields !== "object" || sensitiveFields === null || Array.isArray(sensitiveFields) || typeof authoredBy !== "string") {
+    res.status(400).json({ error: "name (string), sensitiveFields (object mapping field name to required scope), and authoredBy (string) are required" });
+    return;
+  }
+  try {
+    const rule = createRedactionRule({ name, sensitiveFields }, authoredBy, redactionRuleStore, auditLog);
+    res.status(201).json(rule);
+  } catch (err) {
+    if (err instanceof InvalidRedactionRuleError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      throw err;
+    }
+  }
+});
+
+app.get("/redaction-rules", (_req, res) => {
+  res.json(redactionRuleStore.list());
+});
+
+// REQ-009: the actual data-access path. Always the server's own configured
+// default rule — deliberately NOT reading a redactionRuleId from the
+// request body. A caller choosing which rule grades their own access would
+// let anyone with an unauthenticated POST to /redaction-rules (every route
+// here is unauthenticated per ADR-009) create a trivially-weak rule and
+// select it on their own request, bypassing redaction entirely regardless
+// of how caller authentication eventually gets added — that's a design
+// flaw in what gets exposed over HTTP, not something auth alone would fix.
+// accessCustomerData() itself still takes a rule id as a real parameter
+// (used directly by callers who aren't the HTTP boundary, e.g. tests) —
+// this route is the trust boundary that pins it, not the function.
+app.post("/tokens/:id/customer-data/:customerId", (req, res) => {
+  const result = accessCustomerData(
+    req.params.id,
+    req.params.customerId,
+    tokenStore,
+    auditLog,
+    customerDataRegistry,
+    redactionRuleStore,
+    defaultRedactionRule.id,
+  );
+  res.status(200).json(result);
 });
 
 app.get("/audit-log", (_req, res) => {

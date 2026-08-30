@@ -118,3 +118,50 @@ describe("GET /circuit-breaker — unaffected by the admin gate (read-only, inte
     expect(["closed", "open", "half_open"]).toContain(body.state);
   });
 });
+
+// REQ-009 hardening: found and fixed during this story's own post-story
+// review. A caller must never be able to pick which redaction rule grades
+// their own access request — that would let anyone with an unauthenticated
+// POST to /redaction-rules create a trivially weak rule and select it,
+// bypassing redaction regardless of caller auth. The route ignores
+// redactionRuleId entirely; this proves it, over real HTTP.
+describe("POST /tokens/:id/customer-data/:customerId — ignores a caller-supplied redactionRuleId", () => {
+  async function issueTestToken(scope: string[]): Promise<string> {
+    const reqRes = await fetch(`${baseUrl}/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subject: "server-test-agent", scope, ttlSeconds: 300 }),
+    });
+    const { id: requestId } = await reqRes.json();
+    const approveRes = await fetch(`${baseUrl}/requests/${requestId}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ approver: "server-test-approver" }),
+    });
+    const token = await approveRes.json();
+    return token.id;
+  }
+
+  it("still redacts ssn even when the request body supplies a rule id crafted to require only baseline scope", async () => {
+    // A malicious/naive rule requiring only "customer:read" — the SAME
+    // scope already needed for baseline access — for ssn. If the route
+    // honored this, a plain customer:read token would see ssn unredacted.
+    const weakRuleRes = await fetch(`${baseUrl}/redaction-rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Deliberately weak", sensitiveFields: { ssn: "customer:read" }, authoredBy: "test" }),
+    });
+    const weakRule = await weakRuleRes.json();
+
+    const tokenId = await issueTestToken(["customer:read"]);
+    const res = await fetch(`${baseUrl}/tokens/${tokenId}/customer-data/cust-001`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ redactionRuleId: weakRule.id }),
+    });
+    const result = await res.json();
+
+    expect(result.allowed).toBe(true);
+    expect(result.data.ssn).toBe("[REDACTED]"); // the weak rule was never applied
+  });
+});

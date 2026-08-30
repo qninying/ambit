@@ -35,7 +35,9 @@ export interface AuditLogEntry {
     | "policy_created"
     | "policy_modified"
     | "circuit_opened"
-    | "circuit_closed";
+    | "circuit_closed"
+    | "redaction_rule_created"
+    | "data_accessed";
   reasonCode?: string;
   // REQ-018: the detailed, human-readable explanation behind a denial —
   // present only on denials, matching "no error message is returned" for
@@ -50,6 +52,10 @@ export interface AuditLogEntry {
   // the attempt. A gateway can allow an action that then fails to reach its
   // target; those are two different facts, logged as two entries.
   outcome?: "success" | "unreachable";
+  // REQ-009: which fields a redaction pass actually masked on this access —
+  // a separate fact from the access decision itself, same "decision vs
+  // outcome, two entries" principle as `outcome` above (ADR-005).
+  redactedFields?: string[];
   // Chain fields — null previousHash marks the genesis entry. hash covers
   // every other field on this entry (including previousHash), computed by
   // computeEntryHash() below.

@@ -29,7 +29,7 @@ sequence land in the Audit Log with its chain-verified badge.
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **125 tests passing.**
+in a unit test. Current count: **146 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -48,6 +48,19 @@ in a unit test. Current count: **125 tests passing.**
   real time and reason it was revoked for `revoked`. An allowed decision
   carries no message field at all. The audit log records the same detail,
   not just the code.
+
+**Field-level redaction**
+- `src/customerDataAccess.ts` gates customer-data access through the same
+  Enforcement Gateway as everything else, then applies field-level
+  redaction on top: a `RedactionRule` maps each sensitive field to the
+  *specific* scope required to see it unredacted, so a token can hold
+  baseline `customer:read` and see one field elevated (e.g. `ssn`) while
+  everything else in the rule stays masked. A redaction rule id that can't
+  be resolved denies the whole request rather than falling back to
+  unredacted data. The server always applies its own configured rule — a
+  caller cannot select which rule grades their own request, even via the
+  request body, specifically because that would let an unauthenticated
+  `POST /redaction-rules` call craft a rule weak enough to defeat itself.
 
 **Human oversight**
 - Every token request sits pending until a human approves or denies it via
