@@ -200,9 +200,6 @@ function renderRequests(main) {
         </div>
         <div class="form-row">
           <div class="field"><label>TTL (seconds)</label><input id="req-ttl" placeholder="300" /></div>
-          <div class="field"><label>Policy (optional)</label>
-            <select id="req-policy"><option value="">— none —</option>${STATE.policies.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
-          </div>
         </div>
         <button class="btn btn-primary" id="req-submit">Submit request</button>
         <div class="toast" id="req-toast"></div>
@@ -214,12 +211,21 @@ function renderRequests(main) {
   if (list.length === 0) {
     listEl.innerHTML = `<div class="empty-state"><div class="empty-title">No pending requests</div>Every request waits here until an approver acts on it.</div>`;
   } else {
+    // Policy is the approver's own choice, made here at approval time —
+    // never something the requester pre-selected. See ADR-010: a
+    // requester-chosen policy would make "policy attached" a self-issued
+    // rubber stamp with no real governance value.
+    const policyOptions = `<option value="">— no policy —</option>${STATE.policies.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}`;
     listEl.innerHTML = list.map((r) => `
       <div class="panel" style="margin:0 0 12px; box-shadow:none;" data-id="${r.id}">
         <div class="panel-body padded">
           <div style="font-weight:700; font-size:14px; margin-bottom:2px;">${esc(r.subject)}</div>
-          <div style="font-size:13px; color:var(--text); margin-bottom:8px;">Requesting ${scopeTags(r.scope)} — valid ${r.ttlSeconds}s if approved${r.policyId ? ` <span class="badge badge-accent">policy attached</span>` : ""}</div>
+          <div style="font-size:13px; color:var(--text); margin-bottom:8px;">Requesting ${scopeTags(r.scope)} — valid ${r.ttlSeconds}s if approved</div>
           <div style="font-size:11.5px; color:var(--muted-weak); margin-bottom:10px;">Requested ${fmtTime(r.requestedAt)}</div>
+          <div class="field" style="margin-bottom:10px; max-width:280px;">
+            <label style="font-size:11px;">Policy to apply on approval (your choice, not theirs)</label>
+            <select class="approve-policy-select" data-request-id="${r.id}">${policyOptions}</select>
+          </div>
           <button class="btn btn-ok btn-sm" data-action="approve" data-id="${r.id}">Approve</button>
           <button class="btn btn-danger btn-sm" data-action="deny" data-id="${r.id}">Deny</button>
           <div class="toast" data-toast-for="${r.id}"></div>
@@ -237,9 +243,13 @@ function renderRequests(main) {
 async function decideRequest(id, action) {
   const card = document.querySelector(`[data-id="${id}"]`);
   const toast = card.querySelector(`[data-toast-for="${id}"]`);
-  card.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  card.querySelectorAll("button, select").forEach((el) => (el.disabled = true));
   try {
     const body = { approver: "demo-approver" };
+    if (action === "approve") {
+      const select = card.querySelector(".approve-policy-select");
+      if (select && select.value) body.policyId = select.value;
+    }
     // REQ-010: reasonCode is now a required, closed set on the server
     // (POST /requests/:id/deny 400s on anything else) — "other" here is
     // honest, not a placeholder: this one-click demo button genuinely has
@@ -249,7 +259,7 @@ async function decideRequest(id, action) {
   } catch (err) {
     toast.textContent = err.message;
     toast.className = "toast error";
-    card.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    card.querySelectorAll("button, select").forEach((el) => (el.disabled = false));
     return;
   }
   await tick(true);
@@ -259,10 +269,9 @@ async function submitTestRequest() {
   const subject = document.getElementById("req-subject").value.trim();
   const scope = document.getElementById("req-scope").value.split(",").map((s) => s.trim()).filter(Boolean);
   const ttlSeconds = Number(document.getElementById("req-ttl").value);
-  const policyId = document.getElementById("req-policy").value || undefined;
   const toast = document.getElementById("req-toast");
   try {
-    await postJson("/requests", { subject, scope, ttlSeconds, policyId });
+    await postJson("/requests", { subject, scope, ttlSeconds });
   } catch (err) {
     toast.textContent = err.message;
     toast.className = "toast error";

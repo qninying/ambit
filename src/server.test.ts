@@ -165,3 +165,74 @@ describe("POST /tokens/:id/customer-data/:customerId — ignores a caller-suppli
     expect(result.data.ssn).toBe("[REDACTED]"); // the weak rule was never applied
   });
 });
+
+// ADR-010: found during a full trust-boundary audit after all 12 stories
+// shipped. A requester citing their own policyId at submission time made
+// "policy attached" a self-issued rubber stamp — anyone could create a
+// maximally permissive policy and cite it on their own request, and the
+// approver had no way to see which policy (if any) was really attached
+// before clicking Approve. Fixed by moving policy selection to approval
+// time; this proves it over real HTTP.
+describe("Policy selection is the approver's choice, not the requester's", () => {
+  it("ignores a policyId supplied at submission time entirely", async () => {
+    // A deliberately permissive policy an attacker might create and cite
+    // on their own request, hoping approveRequest would inherit it.
+    const permissiveRes = await fetch(`${baseUrl}/policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Attacker-authored", allowedScope: ["payment:charge"], maxTtlSeconds: 999999, authoredBy: "attacker" }),
+    });
+    const permissivePolicy = await permissiveRes.json();
+
+    const reqRes = await fetch(`${baseUrl}/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subject: "policy-test-agent", scope: ["email:send"], ttlSeconds: 300, policyId: permissivePolicy.id }),
+    });
+    const pending = await reqRes.json();
+    // The route silently ignores an unrecognized field — proves the
+    // submitted request never carries a policyId at all, not just that
+    // it's later overridden.
+    expect(pending.policyId).toBeUndefined();
+
+    // Approve with NO policyId — if the server had inherited the
+    // requester's submitted one, this approval would be checked against
+    // the attacker's permissive policy instead of going through unchecked.
+    const approveRes = await fetch(`${baseUrl}/requests/${pending.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ approver: "policy-test-approver" }),
+    });
+    expect(approveRes.status).toBe(200);
+  });
+
+  it("actually enforces the policy the approver picks at approval time", async () => {
+    const restrictiveRes = await fetch(`${baseUrl}/policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Email only, approver-chosen", allowedScope: ["email:send"], maxTtlSeconds: 3600, authoredBy: "privacy-officer" }),
+    });
+    const restrictivePolicy = await restrictiveRes.json();
+
+    const reqRes = await fetch(`${baseUrl}/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subject: "policy-test-agent-2", scope: ["payment:charge"], ttlSeconds: 300 }),
+    });
+    const pending = await reqRes.json();
+
+    // The approver attaches a real, restrictive policy at approval time —
+    // this request's scope (payment:charge) exceeds it, so it must fail.
+    const approveRes = await fetch(`${baseUrl}/requests/${pending.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ approver: "policy-test-approver-2", policyId: restrictivePolicy.id }),
+    });
+    expect(approveRes.status).toBe(400); // PolicyViolationError, caught by the generic error middleware
+    const body = await approveRes.json();
+    expect(body.error).toContain(restrictivePolicy.name);
+
+    const stillPending = await fetch(`${baseUrl}/requests/${pending.id}`).then((r) => r.json());
+    expect(stillPending.status).toBe("pending"); // denied by policy, not consumed — a corrected retry stays possible
+  });
+});

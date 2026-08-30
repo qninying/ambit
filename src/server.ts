@@ -20,6 +20,7 @@ import { InvalidPolicyError, PolicyStore, UnknownPolicyError, createPolicy, modi
 import { CustomerDataRegistry } from "./customerData.js";
 import { InvalidRedactionRuleError, RedactionRuleStore, createRedactionRule } from "./redaction.js";
 import { accessCustomerData } from "./customerDataAccess.js";
+import { timingSafeStringEqual } from "./timingSafeCompare.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -99,8 +100,14 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 
 // POST /requests — submit a token request. Sits pending until an approver
 // acts on it; no token exists yet.
+// Deliberately does NOT accept policyId — see ADR-010. Which policy (if
+// any) governs issuance is the approver's decision, made at approval time;
+// a requester citing their own policy id at submission time would make
+// "policy attached" a self-issued rubber stamp with no real governance
+// value. A policyId in the request body here is silently ignored, same as
+// any other unrecognized field.
 app.post("/requests", (req, res) => {
-  const { subject, scope, ttlSeconds, policyId, idempotencyKey } = req.body ?? {};
+  const { subject, scope, ttlSeconds, idempotencyKey } = req.body ?? {};
   if (typeof subject !== "string" || !Array.isArray(scope) || typeof ttlSeconds !== "number") {
     res.status(400).json({ error: "subject (string), scope (string[]), and ttlSeconds (number) are required" });
     return;
@@ -110,7 +117,6 @@ app.post("/requests", (req, res) => {
       subject,
       scope,
       ttlSeconds,
-      policyId: typeof policyId === "string" ? policyId : undefined,
       idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : undefined,
     },
     requestStore,
@@ -139,14 +145,25 @@ app.get("/requests/:id", (req, res) => {
   res.json(pending);
 });
 
+// ADR-010: policyId is the approver's own choice here, made at approval
+// time — not inherited from anything the requester submitted.
 app.post("/requests/:id/approve", (req, res) => {
   const approver = req.body?.approver;
+  const policyId = req.body?.policyId;
   if (typeof approver !== "string" || approver.length === 0) {
     res.status(400).json({ error: "approver (string) is required" });
     return;
   }
   try {
-    const token = approveRequest(req.params.id, requestStore, tokenStore, auditLog, approver, policyStore);
+    const token = approveRequest(
+      req.params.id,
+      requestStore,
+      tokenStore,
+      auditLog,
+      approver,
+      typeof policyId === "string" ? policyId : undefined,
+      policyStore,
+    );
     res.status(200).json(token);
   } catch (err) {
     if (err instanceof UnknownRequestError) {
@@ -286,7 +303,10 @@ function requireAdminToggleKey(req: express.Request, res: express.Response, next
     res.status(403).json({ error: "fault-injection routes are disabled — set ADMIN_TOGGLE_KEY to enable them" });
     return;
   }
-  if (req.header("x-ambit-admin-key") !== configuredKey) {
+  // Constant-time — this is the one real secret comparison anywhere in this
+  // codebase, so it's the one place a plain !== (which short-circuits at
+  // the first differing character) is actually worth the fix.
+  if (!timingSafeStringEqual(req.header("x-ambit-admin-key") ?? "", configuredKey)) {
     res.status(403).json({ error: "missing or invalid x-ambit-admin-key header" });
     return;
   }

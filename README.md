@@ -29,7 +29,7 @@ sequence land in the Audit Log with its chain-verified badge.
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **153 tests passing.**
+in a unit test. Current count: **162 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -76,6 +76,12 @@ in a unit test. Current count: **153 tests passing.**
   fresh on every issuance — editing a policy changes what the *next*
   issuance allows, proven by re-issuing after modifying, not by inspecting a
   stored record.
+- Which policy governs an approval is the *approver's* choice, made at
+  approval time — never something the requester pre-selects on their own
+  submission (see [ADR-010](adr/ADR-010-policy-selection-moved-to-approval-time.md)).
+  A requester citing their own policy would make "policy attached" a
+  self-issued rubber stamp; the audit trail records exactly which policy an
+  approver applied, not just that one was.
 
 **Client SDK**
 - [`sdk/ambitClient.ts`](sdk/ambitClient.ts) — `AmbitClient`, the thing an
@@ -114,7 +120,9 @@ in a unit test. Current count: **153 tests passing.**
   Token & Policy Store down with a single unauthenticated request, so it got
   a narrow stopgap pulled forward ahead of the rest of
   [ADR-009](adr/ADR-009-trust-boundary-hardening-deferred-to-post-platform-phase.md)'s
-  deferred hardening work.
+  deferred hardening work — and that comparison is constant-time
+  (`src/timingSafeCompare.ts`), not a plain `!==`, since it's the one real
+  secret comparison anywhere in this codebase.
 
 **What's explicitly not real yet:** persistence. Everything above resets on
 a server restart — an in-memory `Map`-backed store, chosen deliberately (see
