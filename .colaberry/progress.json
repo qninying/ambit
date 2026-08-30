@@ -569,21 +569,37 @@
       "criteria": [
         {
           "text": "Given a denied action, when the action is logged, then a distinct reason code is recorded.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Given a denied action due to token expiration, when the action is logged, then the reason code indicates token expiration.",
-          "passed": false
+          "passed": true
         },
         {
           "text": "Trust: Given any denied action, when the action is logged, then the reason code is included in the Audit Log.",
-          "passed": false
+          "passed": true
         }
       ],
-      "files_touched": [],
-      "tests_added": [],
-      "notes": null,
-      "updated_at": null,
+      "files_touched": [
+        "src/tokenRequest.ts",
+        "src/tokenRequest.test.ts",
+        "src/auditLog.ts",
+        "src/auditLog.test.ts",
+        "src/reasonCodeCoverage.test.ts",
+        "src/server.ts",
+        "public/console.js"
+      ],
+      "tests_added": [
+        "AuditLog > REQ-010 > refuses a 'denied' entry with no reasonCode at all",
+        "AuditLog > REQ-010 > refuses a 'denied' entry with an empty-string reasonCode",
+        "AuditLog > REQ-010 > refuses a 'request_denied' entry with no reasonCode",
+        "AuditLog > REQ-010 > accepts a 'denied' entry that does carry a reasonCode",
+        "AuditLog > REQ-010 > does not require a reasonCode on an 'allowed' decision",
+        "AuditLog > REQ-010 > does not add a broken entry to the chain when rejecting a denial with no reasonCode",
+        "REQ-010: distinct reason codes across the real system > assigns a distinct, correct reasonCode to denials from unrelated subsystems, and every one is present in the Audit Log"
+      ],
+      "notes": "reasonCode had already existed on every denial path since STORY-001 and was already consistently populated almost everywhere -- audited every auditLog.record() call site with a denial-shaped decision across the whole codebase (enforceToken, delegateToken, revokeToken, customerDataAccess, circuit breaker transitions, approveRequest's policy-violation catch) before writing any code, specifically to avoid inventing scope this story didn't need. Found exactly ONE real gap: denyRequest()'s reasonCode was optional end-to-end, from the function signature through to the POST /requests/:id/deny route -- a human approver could deny a request via the real API with zero reason recorded, hitting this story's own 'reason code not assigned' failure path directly. Fixed by making reasonCode a required, closed DenialReason union (scope_too_broad/policy_violation/unverified_subject/duplicate_request/other -- same closed-union treatment as RevocationReason, chosen specifically because a free-form string would defeat 'distinct reason codes' even with a value always present) and updating the route to validate against it (400 if missing or invalid), mirroring POST /tokens/:id/revoke's own existing whitelist pattern exactly. Since this story is specifically about audit-log integrity for denials, added a second, structural line of defense at the AuditLog level itself: record() now refuses to accept any 'denied'/'request_denied' entry with no reasonCode (MissingReasonCodeError), so a FUTURE denial path can't silently reintroduce this same gap the way denyRequest's optional parameter originally did -- this converts REQ-010 from 'every call site today happens to be correct' into a permanent, enforced invariant. Added a comprehensive cross-cutting test (reasonCodeCoverage.test.ts) exercising denials across 6 unrelated subsystems together (enforce expired/out-of-scope/unknown-token, delegation exceeds-parent-scope, human denial, customer-data out-of-scope and unknown-customer) and asserting the resulting Audit Log has a distinct, correct reasonCode for every single one -- proving REQ-010 the way an actual compliance reviewer would check it, not just per-function in isolation. Post-story review (per the standing rule) caught a real regression before commit: the Console's Deny button (public/console.js) sent a hardcoded reasonCode ('declined_by_approver') that wasn't in the new closed union -- would have 400'd on every click. Fixed to 'other' (the honest, generic catch-all -- a one-click demo button genuinely has no more specific reason to report) and live-verified the fix in the Browser pane: clicked Deny, confirmed a real 204 (not 400) over the network, zero console errors, request correctly cleared from the pending list. Separately noticed unrelated stale copy in the same tab ('stands in for the client SDK, not built yet' -- the SDK shipped in STORY-008) -- not something this story introduced, so flagged as a separate spawned task rather than fixed here.",
+      "updated_at": "2026-08-30T22:58:00Z",
       "verification": null
     }
   ]

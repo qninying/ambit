@@ -259,7 +259,7 @@ describe("denyRequest", () => {
 
   it("refuses to deny an unknown request id", () => {
     const { requestStore, auditLog, anomalyDetector } = setup();
-    expect(() => denyRequest("not-a-real-id", requestStore, auditLog, "approver-1")).toThrow(UnknownRequestError);
+    expect(() => denyRequest("not-a-real-id", requestStore, auditLog, "approver-1", "other")).toThrow(UnknownRequestError);
   });
 
   it("refuses to deny an already-decided request", () => {
@@ -267,6 +267,6 @@ describe("denyRequest", () => {
     const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
     approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
-    expect(() => denyRequest(pending.id, requestStore, auditLog, "approver-2")).toThrow(RequestNotPendingError);
+    expect(() => denyRequest(pending.id, requestStore, auditLog, "approver-2", "other")).toThrow(RequestNotPendingError);
   });
 });

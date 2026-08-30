@@ -1,7 +1,60 @@
 import { describe, expect, it } from "vitest";
-import { AuditLog, computeEntryHash, verifyAuditChain } from "./auditLog.js";
+import { AuditLog, MissingReasonCodeError, computeEntryHash, verifyAuditChain } from "./auditLog.js";
 
 describe("AuditLog", () => {
+  // REQ-010, structural guarantee: not just "every call site today happens
+  // to supply a reasonCode" — the log itself refuses to accept one that
+  // doesn't, so a future denial path can't silently reintroduce the gap
+  // denyRequest's originally-optional parameter had.
+  describe("REQ-010: reasonCode is required on every denial", () => {
+    it("refuses a 'denied' entry with no reasonCode at all", () => {
+      const auditLog = new AuditLog();
+      expect(() => auditLog.record({ tokenId: "t1", subject: "agent-42", action: "email:send", decision: "denied" })).toThrow(
+        MissingReasonCodeError,
+      );
+    });
+
+    it("refuses a 'denied' entry with an empty-string reasonCode", () => {
+      const auditLog = new AuditLog();
+      expect(() =>
+        auditLog.record({ tokenId: "t1", subject: "agent-42", action: "email:send", decision: "denied", reasonCode: "   " }),
+      ).toThrow(MissingReasonCodeError);
+    });
+
+    it("refuses a 'request_denied' entry with no reasonCode", () => {
+      const auditLog = new AuditLog();
+      expect(() => auditLog.record({ requestId: "r1", subject: "agent-42", action: "deny_request", decision: "request_denied" })).toThrow(
+        MissingReasonCodeError,
+      );
+    });
+
+    it("accepts a 'denied' entry that does carry a reasonCode", () => {
+      const auditLog = new AuditLog();
+      const entry = auditLog.record({ tokenId: "t1", subject: "agent-42", action: "email:send", decision: "denied", reasonCode: "expired" });
+      expect(entry.reasonCode).toBe("expired");
+    });
+
+    // Non-denial decisions never needed a reasonCode and still don't — this
+    // guarantee is scoped to denials specifically, not every entry.
+    it("does not require a reasonCode on an 'allowed' decision", () => {
+      const auditLog = new AuditLog();
+      expect(() => auditLog.record({ tokenId: "t1", subject: "agent-42", action: "email:send", decision: "allowed" })).not.toThrow();
+    });
+
+    // Rejecting an invalid entry must not silently corrupt the chain —
+    // nothing should be pushed, and the next valid entry still links back
+    // to whatever the real last entry was before the rejected attempt.
+    it("does not add a broken entry to the chain when rejecting a denial with no reasonCode", () => {
+      const auditLog = new AuditLog();
+      const first = auditLog.record({ tokenId: "t1", subject: "agent-42", action: "email:send", decision: "allowed" });
+
+      expect(() => auditLog.record({ tokenId: "t2", subject: "agent-43", action: "email:send", decision: "denied" })).toThrow();
+
+      const second = auditLog.record({ tokenId: "t3", subject: "agent-44", action: "email:send", decision: "allowed" });
+      expect(auditLog.entries()).toHaveLength(2);
+      expect(second.previousHash).toBe(first.hash);
+    });
+  });
   it("returns a fresh array from entries() each call, not a live reference the caller could mutate", () => {
     const auditLog = new AuditLog();
     auditLog.record({ tokenId: "t1", subject: "agent-42", action: "email:send", decision: "allowed" });

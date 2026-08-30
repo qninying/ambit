@@ -29,7 +29,7 @@ sequence land in the Audit Log with its chain-verified badge.
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **146 tests passing.**
+in a unit test. Current count: **153 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -48,6 +48,12 @@ in a unit test. Current count: **146 tests passing.**
   real time and reason it was revoked for `revoked`. An allowed decision
   carries no message field at all. The audit log records the same detail,
   not just the code.
+- Every denial across the system carries a distinct, correct `reasonCode`
+  — enforced structurally, not just by convention: `AuditLog.record()`
+  itself refuses to accept a `"denied"`/`"request_denied"` entry with no
+  `reasonCode`, so a future denial path can't silently ship without one.
+  Human denials (`POST /requests/:id/deny`) require one of a closed set of
+  reasons, same treatment as `revokeToken`'s own reason codes.
 
 **Field-level redaction**
 - `src/customerDataAccess.ts` gates customer-data access through the same

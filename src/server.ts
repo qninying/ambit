@@ -11,7 +11,7 @@ import { AuditLog } from "./auditLog.js";
 import { CircuitOpenError, CircuitBreaker } from "./circuitBreaker.js";
 import { InvalidScopeError, PolicyViolationError, UnknownTokenError, enforceToken, revokeToken, type RevocationReason } from "./token.js";
 import { delegateToken } from "./delegation.js";
-import { RequestNotPendingError, UnknownRequestError, approveRequest, denyRequest, requestToken } from "./tokenRequest.js";
+import { RequestNotPendingError, UnknownRequestError, approveRequest, denyRequest, requestToken, type DenialReason } from "./tokenRequest.js";
 import { RequestStore } from "./requestStore.js";
 import { TokenStore } from "./tokenStore.js";
 import { MockEndpointRegistry, type MockSystem } from "./mockEndpoints.js";
@@ -159,15 +159,24 @@ app.post("/requests/:id/approve", (req, res) => {
   }
 });
 
+const VALID_DENIAL_REASONS: DenialReason[] = ["scope_too_broad", "policy_violation", "unverified_subject", "duplicate_request", "other"];
+
+// REQ-010: reasonCode is required here, same treatment as
+// POST /tokens/:id/revoke's own reasonCode whitelist — a denial with no
+// recorded reason is exactly the gap this story exists to close.
 app.post("/requests/:id/deny", (req, res) => {
   const approver = req.body?.approver;
-  const reasonCode = req.body?.reasonCode;
+  const reasonCode = req.body?.reasonCode as DenialReason | undefined;
   if (typeof approver !== "string" || approver.length === 0) {
     res.status(400).json({ error: "approver (string) is required" });
     return;
   }
+  if (!reasonCode || !VALID_DENIAL_REASONS.includes(reasonCode)) {
+    res.status(400).json({ error: `reasonCode must be one of: ${VALID_DENIAL_REASONS.join(", ")}` });
+    return;
+  }
   try {
-    denyRequest(req.params.id, requestStore, auditLog, approver, typeof reasonCode === "string" ? reasonCode : undefined);
+    denyRequest(req.params.id, requestStore, auditLog, approver, reasonCode);
     res.status(204).end();
   } catch (err) {
     if (err instanceof UnknownRequestError) {

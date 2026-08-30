@@ -89,10 +89,33 @@ export function verifyAuditChain(entries: readonly AuditLogEntry[]): ChainVerifi
   return { valid: true, brokenAtId: null, entriesChecked: entries.length };
 }
 
+// REQ-010: which decisions represent an attempted action being refused —
+// "circuit_opened" or "revoked" are real events but not themselves a
+// denial of an attempted action (the store_unavailable/revoked denials
+// those cause are separately logged as "denied" already), so they're
+// deliberately excluded from this set.
+const DENIAL_DECISIONS: ReadonlySet<AuditLogEntry["decision"]> = new Set(["denied", "request_denied"]);
+
+export class MissingReasonCodeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MissingReasonCodeError";
+  }
+}
+
 export class AuditLog {
   #entries: AuditLogEntry[] = [];
 
   record(entry: Omit<AuditLogEntry, "id" | "occurredAt" | "previousHash" | "hash">, now: Date = new Date()): AuditLogEntry {
+    // REQ-010, structural guarantee: not just "every call site today
+    // happens to supply one" — the log itself refuses to accept a denial
+    // with no reason, so a future call site can't silently reintroduce
+    // this gap the way denyRequest's optional parameter originally did.
+    if (DENIAL_DECISIONS.has(entry.decision) && (!entry.reasonCode || entry.reasonCode.trim().length === 0)) {
+      throw new MissingReasonCodeError(
+        `a "${entry.decision}" audit entry must include a reasonCode — REQ-010 requires every denied action to record a distinct reason, not just be logged as denied`,
+      );
+    }
     const previousHash = this.#entries.length > 0 ? this.#entries[this.#entries.length - 1]!.hash : null;
     const withoutHash: Omit<AuditLogEntry, "hash"> = {
       id: crypto.randomUUID(),

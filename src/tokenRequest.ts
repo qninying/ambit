@@ -148,12 +148,22 @@ export function approveRequest(
   return token;
 }
 
+// REQ-010: a closed, distinct set — not a free-form string an approver
+// could phrase five different ways for the same underlying reason, which
+// would defeat "distinct reason codes" in practice even if a value is
+// always present. Same closed-union treatment as RevocationReason.
+export type DenialReason = "scope_too_broad" | "policy_violation" | "unverified_subject" | "duplicate_request" | "other";
+
 export function denyRequest(
   requestId: string,
   requestStore: RequestStore,
   auditLog: AuditLog,
   approver: string,
-  reasonCode?: string,
+  // REQ-010: required, not optional — a denial with no recorded reason is
+  // exactly the "reason code not assigned" failure path this story exists
+  // to close. AuditLog.record() also refuses a reasonCode-less denial as a
+  // second, structural line of defense (see auditLog.ts).
+  reasonCode: DenialReason,
   now: Date = new Date(),
 ): void {
   const pending = getPending(requestId, requestStore, "deny");

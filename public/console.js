@@ -240,7 +240,11 @@ async function decideRequest(id, action) {
   card.querySelectorAll("button").forEach((b) => (b.disabled = true));
   try {
     const body = { approver: "demo-approver" };
-    if (action === "deny") body.reasonCode = "declined_by_approver";
+    // REQ-010: reasonCode is now a required, closed set on the server
+    // (POST /requests/:id/deny 400s on anything else) — "other" here is
+    // honest, not a placeholder: this one-click demo button genuinely has
+    // no more specific reason to report than "the approver declined it."
+    if (action === "deny") body.reasonCode = "other";
     await postJson(`/requests/${id}/${action}`, body);
   } catch (err) {
     toast.textContent = err.message;
