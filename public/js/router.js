@@ -1,5 +1,6 @@
 import { STATE } from "./state.js";
-import { esc, hashParam, iconGrid, iconInbox, iconKey, iconShield, iconRedact, iconList, iconPulse } from "./format.js";
+import { esc, hashParam } from "./format.js";
+import { TABS } from "./tabsMeta.js";
 import { renderOverview } from "./tabs/overview.js";
 import { renderRequests } from "./tabs/requests.js";
 import { renderTokenList } from "./tabs/tokens/list.js";
@@ -8,16 +9,6 @@ import { renderPolicies } from "./tabs/policies.js";
 import { renderRedactionRules } from "./tabs/redactionRules.js";
 import { renderAudit } from "./tabs/audit.js";
 import { renderSystem } from "./tabs/system.js";
-
-export const TABS = [
-  { id: "overview", label: "Overview", icon: iconGrid },
-  { id: "requests", label: "Requests", icon: iconInbox, badgeKey: "pendingCount" },
-  { id: "tokens", label: "Tokens", icon: iconKey },
-  { id: "policies", label: "Policies", icon: iconShield },
-  { id: "redaction", label: "Redaction Rules", icon: iconRedact },
-  { id: "audit", label: "Audit Log", icon: iconList },
-  { id: "system", label: "System", icon: iconPulse, badgeKey: "breakerOpen" },
-];
 
 const TAB_COPY = {
   overview: ["Overview", "What's happening across Ambit right now."],

@@ -5,7 +5,8 @@
   "scripts": {
     "test": "vitest run",
     "build": "tsc --noEmit",
-    "start": "tsx src/server.ts"
+    "start": "tsx src/server.ts",
+    "hash-password": "tsx scripts/hashPassword.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

@@ -4,7 +4,7 @@
 // closes on Escape/outside-click/selection.
 
 import { esc } from "./format.js";
-import { TABS } from "./router.js";
+import { TABS } from "./tabsMeta.js";
 
 let overlay = null;
 let activeIndex = 0;

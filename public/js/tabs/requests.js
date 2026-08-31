@@ -1,11 +1,13 @@
 import { STATE, postJson } from "../state.js";
 import { esc, fmtTime, scopeTags } from "../format.js";
-import { actingAs } from "../session.js";
+import { currentUsername } from "../auth.js";
+import { updateAuthWidget } from "../chrome.js";
 import { confirmAction } from "../confirm.js";
 
 export function renderRequests(main, tick) {
   const list = STATE.requests;
   main.innerHTML = `
+    ${list.length > 0 && !currentUsername() ? `<div class="stale-warning">Not signed in — approving or denying a request needs a real operator login (top right). Submitting a test request doesn't.</div>` : ""}
     <div class="panel">
       <div class="panel-header"><h3>Pending requests</h3><span class="panel-meta">${list.length} waiting</span></div>
       <div class="panel-body padded" id="requests-list"></div>
@@ -61,6 +63,17 @@ export function renderRequests(main, tick) {
 }
 
 async function decideRequest(id, action, tick) {
+  const card = document.querySelector(`[data-id="${id}"]`);
+  const toast = card.querySelector(`[data-toast-for="${id}"]`);
+  // ADR-011: approve/deny require a real session now — approver is derived
+  // from it server-side, never sent by the client. Checked client-side
+  // first purely as a UX nicety (skip an obviously-doomed round-trip); the
+  // server's own requireSession check is what actually enforces this.
+  if (!currentUsername()) {
+    toast.textContent = "Log in first — top right.";
+    toast.className = "toast error";
+    return;
+  }
   if (action === "deny") {
     const ok = await confirmAction({
       title: "Deny this request?",
@@ -69,11 +82,9 @@ async function decideRequest(id, action, tick) {
     });
     if (!ok) return;
   }
-  const card = document.querySelector(`[data-id="${id}"]`);
-  const toast = card.querySelector(`[data-toast-for="${id}"]`);
   card.querySelectorAll("button, select").forEach((el) => (el.disabled = true));
   try {
-    const body = { approver: actingAs() };
+    const body = {};
     if (action === "approve") {
       const select = card.querySelector(".approve-policy-select");
       if (select && select.value) body.policyId = select.value;
@@ -85,6 +96,7 @@ async function decideRequest(id, action, tick) {
     if (action === "deny") body.reasonCode = "other";
     await postJson(`/requests/${id}/${action}`, body);
   } catch (err) {
+    updateAuthWidget(); // in case postJson cleared an expired session on a 401
     toast.textContent = err.message;
     toast.className = "toast error";
     card.querySelectorAll("button, select").forEach((el) => (el.disabled = false));

@@ -31,7 +31,7 @@ async function tick(force = false) {
   }
 }
 
-initChrome();
+initChrome(tick);
 
 window.addEventListener("hashchange", () => {
   setFormOpen(false); // leaving the tab — any open form here no longer exists

@@ -22,18 +22,26 @@ npm run start
 Then open `http://localhost:4000/console.html` — a live admin console
 (Overview, Requests, Tokens, Policies, Redaction Rules, Audit Log, System)
 reading real data from the running server, not sample data. Submit a token
-request, approve or deny it, watch a real token appear in the Tokens tab,
-delegate a narrower child token from it, access a demo customer record and
-watch field-level redaction happen live, revoke it, and see the whole
-sequence land in the Audit Log with its chain-verified badge. ⌘K opens a
-command palette to jump between sections; the theme toggle switches
-light/dark, both persisted per-browser.
+request, then log in to approve or deny it (see below), watch a real token
+appear in the Tokens tab, delegate a narrower child token from it, access a
+demo customer record and watch field-level redaction happen live, revoke it,
+and see the whole sequence land in the Audit Log with its chain-verified
+badge. ⌘K opens a command palette to jump between sections; the theme toggle
+switches light/dark, both persisted per-browser.
+
+Approving or denying a request needs a real operator login:
+
+```bash
+npm run hash-password -- 'pick-any-password'
+# then, with the printed hash:
+ADMIN_USERNAME=admin ADMIN_PASSWORD_HASH='<the printed hash>' SESSION_SIGNING_SECRET='any-long-random-string' npm run start
+```
 
 ## What's real
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **162 tests passing.**
+in a unit test. Current count: **181 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -86,6 +94,16 @@ in a unit test. Current count: **162 tests passing.**
   A requester citing their own policy would make "policy attached" a
   self-issued rubber stamp; the audit trail records exactly which policy an
   approver applied, not just that one was.
+- Approving or denying a request requires a real, authenticated operator
+  session — `POST /auth/login` checks a scrypt-hashed password and issues a
+  signed, expiring token (`src/sessionToken.ts`, no JWT library — `node:crypto`
+  covers it completely); `approver` in the audit trail comes from that
+  session, never from a field the client sends (see
+  [ADR-011](adr/ADR-011-real-operator-authentication-first-slice.md)).
+  **Scoped honestly, not implied broader than it is**: this is the first
+  slice of [ADR-009](adr/ADR-009-trust-boundary-hardening-deferred-to-post-platform-phase.md)'s
+  hardening phase — every other mutating route (revoke, policy management,
+  redaction rules, delegation, request submission) is still unauthenticated.
 
 **Console**
 - Every backend capability above has a real UI surface, not just an API —

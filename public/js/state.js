@@ -2,6 +2,8 @@
 // that keep background polling from clobbering an operator's work. Owns no
 // rendering and no routing — app.js is what ties this to render().
 
+import { getSessionToken, clearSessionToken } from "./auth.js";
+
 export const POLL_MS = 4000;
 
 // Exported as a live binding (never destructure this into a local — that
@@ -31,13 +33,19 @@ export async function fetchJson(path) {
   return res.json();
 }
 
+// ADR-011: attaches the session token (if any) to every POST — harmless on
+// routes that don't require one (most of the API still doesn't), and the
+// one thing approve/deny actually need. A 401 means the session is no
+// longer valid (expired, or signed with a secret that's since rotated) —
+// clear it so the UI asks to log in again instead of silently retrying
+// with a token that will never work.
 export async function postJson(path, body, extraHeaders) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(extraHeaders || {}) },
-    body: JSON.stringify(body),
-  });
+  const token = getSessionToken();
+  const headers = { "Content-Type": "application/json", ...(extraHeaders || {}) };
+  if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) clearSessionToken();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
