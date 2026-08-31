@@ -41,7 +41,7 @@ ADMIN_USERNAME=admin ADMIN_PASSWORD_HASH='<the printed hash>' SESSION_SIGNING_SE
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **181 tests passing.**
+in a unit test. Current count: **199 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -104,6 +104,18 @@ in a unit test. Current count: **181 tests passing.**
   slice of [ADR-009](adr/ADR-009-trust-boundary-hardening-deferred-to-post-platform-phase.md)'s
   hardening phase — every other mutating route (revoke, policy management,
   redaction rules, delegation, request submission) is still unauthenticated.
+- Submitting a token request requires a real, registered agent credential —
+  `POST /requests` no longer accepts `subject` as a plain client-supplied
+  field at all; it's derived server-side from an `Authorization: Bearer
+  <id>.<secret>` credential (`src/agentIdentity.ts`, scrypt-hashed at rest,
+  looked up by id then verified, same pattern as operator passwords). An
+  operator mints agent identities via `POST /agent-identities`, one-time
+  credential returned at registration only (see
+  [ADR-012](adr/ADR-012-agent-caller-authentication-second-slice.md)).
+  **Scoped honestly**: this closes [ADR-009](adr/ADR-009-trust-boundary-hardening-deferred-to-post-platform-phase.md)
+  item 1 for `POST /requests` only — every other mutating route is still
+  unauthenticated, and there's no revoke/rotate path yet for a leaked agent
+  credential.
 
 **Console**
 - Every backend capability above has a real UI surface, not just an API —

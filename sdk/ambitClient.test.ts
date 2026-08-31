@@ -6,18 +6,44 @@
 
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { hashPassword } from "../src/passwordHash.js";
 import { app } from "../src/server.js";
 import { AmbitClient, AmbitClientError } from "./ambitClient.js";
 
 let server: Server;
 let client: AmbitClient;
+let baseUrl: string;
+const SDK_TEST_SUBJECT = "sdk-test-agent";
 
 beforeAll(async () => {
+  process.env.ADMIN_USERNAME = "sdk-test-admin";
+  process.env.ADMIN_PASSWORD_HASH = await hashPassword("sdk-test-password");
+  process.env.SESSION_SIGNING_SECRET = "sdk-test-signing-secret";
+
   server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
-  client = new AmbitClient({ baseUrl: `http://127.0.0.1:${port}`, timeoutMs: 1_000, retryDelayMs: 5 });
+  baseUrl = `http://127.0.0.1:${port}`;
+
+  // ADR-009 hardening: requestToken() now needs a real, pre-registered
+  // agent credential — same as any real caller would, not a bypass. An
+  // operator logs in, registers the agent this SDK instance speaks for,
+  // and the client is configured with the resulting credential.
+  const loginRes = await fetch(`${baseUrl}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "sdk-test-admin", password: "sdk-test-password" }),
+  });
+  const { token: sessionToken } = await loginRes.json();
+  const registerRes = await fetch(`${baseUrl}/agent-identities`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify({ subject: SDK_TEST_SUBJECT }),
+  });
+  const { credential } = await registerRes.json();
+
+  client = new AmbitClient({ baseUrl, agentCredential: credential, timeoutMs: 1_000, retryDelayMs: 5 });
 });
 
 afterAll(async () => {
@@ -25,13 +51,27 @@ afterAll(async () => {
 });
 
 describe("AmbitClient.requestToken", () => {
+  // ADR-009 hardening: fails fast, client-side, with an actionable message
+  // — never even reaches the network — rather than surfacing a bare 401
+  // the caller has to reverse-engineer.
+  it("refuses to call requestToken at all when no agentCredential is configured", async () => {
+    const noCredClient = new AmbitClient({ baseUrl });
+    await expect(noCredClient.requestToken({ scope: ["email:send"], ttlSeconds: 300 })).rejects.toMatchObject({
+      name: "AmbitClientError",
+      message: expect.stringContaining("agentCredential"),
+    });
+  });
+
   // Given a developer, when they use the SDK, then they can request a token.
   it("submits a real request to the real server and gets a pending request back", async () => {
-    const request = await client.requestToken({ subject: "sdk-agent-1", scope: ["email:send"], ttlSeconds: 300 });
+    const request = await client.requestToken({ scope: ["email:send"], ttlSeconds: 300 });
 
     expect(request.id).toBeTruthy();
     expect(request.status).toBe("pending");
-    expect(request.subject).toBe("sdk-agent-1");
+    // Derived from the registered agent credential, not something this
+    // call specified — proving subject really is server-derived, not just
+    // absent from the type.
+    expect(request.subject).toBe(SDK_TEST_SUBJECT);
   });
 
   // Given a token request, when it is invalid, then an error is returned —
@@ -39,7 +79,7 @@ describe("AmbitClient.requestToken", () => {
   it("throws a typed AmbitClientError with the server's own message for an invalid request", async () => {
     await expect(
       // @ts-expect-error — deliberately missing scope, the failure path under test
-      client.requestToken({ subject: "sdk-agent-1", ttlSeconds: 300 }),
+      client.requestToken({ ttlSeconds: 300 }),
     ).rejects.toMatchObject({
       name: "AmbitClientError",
       status: 400,
@@ -60,7 +100,7 @@ describe("AmbitClient.requestToken", () => {
     try {
       await expect(
         // @ts-expect-error — deliberately missing scope, the failure path under test
-        client.requestToken({ subject: "sdk-agent-1", ttlSeconds: 300, idempotencyKey: "bad-request-key" }),
+        client.requestToken({ ttlSeconds: 300, idempotencyKey: "bad-request-key" }),
       ).rejects.toThrow(AmbitClientError);
       expect(calls).toBe(1);
     } finally {
@@ -72,13 +112,11 @@ describe("AmbitClient.requestToken", () => {
   // pair together produce exactly one request, not two.
   it("submitting the same idempotencyKey twice returns the same request rather than creating a second one", async () => {
     const first = await client.requestToken({
-      subject: "sdk-agent-2",
       scope: ["email:send"],
       ttlSeconds: 300,
       idempotencyKey: "sdk-retry-key-1",
     });
     const second = await client.requestToken({
-      subject: "sdk-agent-2",
       scope: ["email:send"],
       ttlSeconds: 300,
       idempotencyKey: "sdk-retry-key-1",
@@ -103,7 +141,6 @@ describe("AmbitClient reliability (CLAUDE.md: explicit timeout, capped retries)"
 
     try {
       const result = await client.requestToken({
-        subject: "sdk-agent-retry",
         scope: ["email:send"],
         ttlSeconds: 300,
         idempotencyKey: "sdk-retry-key-transient",
@@ -119,7 +156,11 @@ describe("AmbitClient reliability (CLAUDE.md: explicit timeout, capped retries)"
   // configured timeout, reported as a status:0 AmbitClientError (never
   // reached a real HTTP response) rather than left unbounded.
   it("times out a request that never responds, instead of hanging indefinitely", async () => {
-    const shortTimeoutClient = new AmbitClient({ baseUrl: "http://127.0.0.1:1", timeoutMs: 50, maxAttempts: 1 });
+    // agentCredential doesn't need to be real here — fetch itself is
+    // mocked below, and this is only present so the client's own
+    // "credential configured?" check doesn't short-circuit before the
+    // timeout behavior under test ever gets exercised.
+    const shortTimeoutClient = new AmbitClient({ baseUrl: "http://127.0.0.1:1", agentCredential: "fake.fake", timeoutMs: 50, maxAttempts: 1 });
     const originalFetch = globalThis.fetch;
     // A real hung connection settles (rejects) once its AbortSignal fires —
     // this mock has to do the same, or the abort() below has nothing to
@@ -131,7 +172,7 @@ describe("AmbitClient reliability (CLAUDE.md: explicit timeout, capped retries)"
 
     try {
       await expect(
-        shortTimeoutClient.requestToken({ subject: "sdk-agent-timeout", scope: ["email:send"], ttlSeconds: 300 }),
+        shortTimeoutClient.requestToken({ scope: ["email:send"], ttlSeconds: 300 }),
       ).rejects.toMatchObject({ name: "AmbitClientError", status: 0 });
     } finally {
       globalThis.fetch = originalFetch;
@@ -144,7 +185,7 @@ describe("AmbitClient.getRequest", () => {
   // consequence (the request exists server-side and can be read back with
   // its real status), not by asserting against the SDK's own internals.
   it("reads back the real status of a request submitted through the SDK", async () => {
-    const submitted = await client.requestToken({ subject: "sdk-agent-3", scope: ["email:send"], ttlSeconds: 300 });
+    const submitted = await client.requestToken({ scope: ["email:send"], ttlSeconds: 300 });
 
     const fetched = await client.getRequest(submitted.id);
 

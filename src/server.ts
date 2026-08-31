@@ -23,13 +23,17 @@ import { accessCustomerData } from "./customerDataAccess.js";
 import { timingSafeStringEqual } from "./timingSafeCompare.js";
 import { verifyPassword } from "./passwordHash.js";
 import { createSessionToken, verifySessionToken } from "./sessionToken.js";
+import { AgentIdentityStore, DuplicateAgentIdentityError, InvalidAgentIdentityError, authenticateAgent, registerAgentIdentity } from "./agentIdentity.js";
 
 // ADR-009 hardening: req.session is set only by requireSession (below),
-// once a token has genuinely verified — never trusted from anywhere else.
+// once a session token has genuinely verified — never trusted from
+// anywhere else. req.agentIdentity is set only by requireAgentCredential,
+// once an agent credential has genuinely verified, same reasoning.
 declare global {
   namespace Express {
     interface Request {
       session?: { username: string };
+      agentIdentity?: { subject: string };
     }
   }
 }
@@ -124,6 +128,13 @@ function getSessionConfig(): { signingSecret: string; ttlMs?: number } | null {
   return { signingSecret, ttlMs: envNumber("SESSION_TTL_MS") };
 }
 
+// ADR-009 hardening: closes requester-identity spoofing on POST /requests
+// — "subject" used to be whatever the caller typed into the request body.
+// Deliberately NOT wired to storeCircuitBreaker, same reasoning as
+// customerDataRegistry/redactionRuleStore above — REQ-008 names "Policy &
+// Token Store" specifically.
+const agentIdentityStore = new AgentIdentityStore();
+
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
@@ -181,6 +192,58 @@ function requireSession(req: express.Request, res: express.Response, next: expre
   next();
 }
 
+// ADR-009 hardening: an operator (already authenticated via requireSession)
+// registers a known agent. The credential is returned exactly once, here —
+// never retrievable again, only its hash is stored.
+app.post("/agent-identities", requireSession, async (req, res) => {
+  const { subject } = req.body ?? {};
+  if (typeof subject !== "string") {
+    res.status(400).json({ error: "subject (string) is required" });
+    return;
+  }
+  try {
+    const { identity, credential } = await registerAgentIdentity(
+      { subject },
+      req.session!.username,
+      agentIdentityStore,
+      auditLog,
+    );
+    res.status(201).json({ id: identity.id, subject: identity.subject, credential });
+  } catch (err) {
+    if (err instanceof InvalidAgentIdentityError || err instanceof DuplicateAgentIdentityError) {
+      res.status(400).json({ error: err.message });
+    } else {
+      throw err;
+    }
+  }
+});
+
+// Metadata only — never the credential itself, which was never stored raw
+// in the first place.
+app.get("/agent-identities", requireSession, (_req, res) => {
+  res.json(agentIdentityStore.list().map((i) => ({ id: i.id, subject: i.subject, createdBy: i.createdBy, createdAt: i.createdAt })));
+});
+
+// ADR-009 hardening: applied to POST /requests below. Closes requester-
+// identity spoofing — "subject" is derived from a real, pre-registered
+// credential, never something the caller types into the request body.
+// Never throws; a missing/invalid/unrecognized credential is a clean 401.
+async function requireAgentCredential(req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> {
+  const header = req.header("authorization") ?? "";
+  const credential = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+  if (!credential) {
+    res.status(401).json({ error: "missing Authorization: Bearer <agentId>.<secret> header" });
+    return;
+  }
+  const identity = await authenticateAgent(credential, agentIdentityStore);
+  if (!identity) {
+    res.status(401).json({ error: "invalid agent credential" });
+    return;
+  }
+  req.agentIdentity = { subject: identity.subject };
+  next();
+}
+
 // POST /requests — submit a token request. Sits pending until an approver
 // acts on it; no token exists yet.
 // Deliberately does NOT accept policyId — see ADR-010. Which policy (if
@@ -189,15 +252,18 @@ function requireSession(req: express.Request, res: express.Response, next: expre
 // "policy attached" a self-issued rubber stamp with no real governance
 // value. A policyId in the request body here is silently ignored, same as
 // any other unrecognized field.
-app.post("/requests", (req, res) => {
-  const { subject, scope, ttlSeconds, idempotencyKey } = req.body ?? {};
-  if (typeof subject !== "string" || !Array.isArray(scope) || typeof ttlSeconds !== "number") {
-    res.status(400).json({ error: "subject (string), scope (string[]), and ttlSeconds (number) are required" });
+// ADR-009 hardening: requires a real agent credential — subject comes from
+// req.agentIdentity, never from the request body. A subject field in the
+// body is silently ignored, same treatment as policyId above.
+app.post("/requests", requireAgentCredential, (req, res) => {
+  const { scope, ttlSeconds, idempotencyKey } = req.body ?? {};
+  if (!Array.isArray(scope) || typeof ttlSeconds !== "number") {
+    res.status(400).json({ error: "scope (string[]) and ttlSeconds (number) are required" });
     return;
   }
   const pending = requestToken(
     {
-      subject,
+      subject: req.agentIdentity!.subject,
       scope,
       ttlSeconds,
       idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : undefined,

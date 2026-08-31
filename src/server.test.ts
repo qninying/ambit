@@ -13,10 +13,12 @@ import { app } from "./server.js";
 
 let server: Server;
 let baseUrl: string;
+let defaultAgentCredential: string;
 
 const TEST_ADMIN_USERNAME = "test-admin";
 const TEST_ADMIN_PASSWORD = "correct horse battery staple";
 const TEST_SESSION_SECRET = "test-session-signing-secret-do-not-use-in-prod";
+const DEFAULT_AGENT_SUBJECT = "server-test-default-agent";
 
 beforeAll(async () => {
   // Auth config is read fresh per-request in server.ts specifically so
@@ -31,6 +33,23 @@ beforeAll(async () => {
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
   baseUrl = `http://127.0.0.1:${port}`;
+
+  // ADR-009 hardening: POST /requests now requires a real, pre-registered
+  // agent credential. One shared default agent for tests that don't care
+  // about the exact subject value — same principle as sdk/ambitClient.test.ts.
+  const loginRes = await fetch(`${baseUrl}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: TEST_ADMIN_PASSWORD }),
+  });
+  const { token: sessionToken } = await loginRes.json();
+  const registerRes = await fetch(`${baseUrl}/agent-identities`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify({ subject: DEFAULT_AGENT_SUBJECT }),
+  });
+  const { credential } = await registerRes.json();
+  defaultAgentCredential = credential;
 });
 
 afterAll(async () => {
@@ -154,8 +173,8 @@ describe("POST /tokens/:id/customer-data/:customerId — ignores a caller-suppli
   async function issueTestToken(scope: string[]): Promise<string> {
     const reqRes = await fetch(`${baseUrl}/requests`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ subject: "server-test-agent", scope, ttlSeconds: 300 }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+      body: JSON.stringify({ scope, ttlSeconds: 300 }),
     });
     const { id: requestId } = await reqRes.json();
     const sessionToken = await login();
@@ -212,8 +231,8 @@ describe("Policy selection is the approver's choice, not the requester's", () =>
 
     const reqRes = await fetch(`${baseUrl}/requests`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ subject: "policy-test-agent", scope: ["email:send"], ttlSeconds: 300, policyId: permissivePolicy.id }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+      body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300, policyId: permissivePolicy.id }),
     });
     const pending = await reqRes.json();
     // The route silently ignores an unrecognized field — proves the
@@ -243,8 +262,8 @@ describe("Policy selection is the approver's choice, not the requester's", () =>
 
     const reqRes = await fetch(`${baseUrl}/requests`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ subject: "policy-test-agent-2", scope: ["payment:charge"], ttlSeconds: 300 }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+      body: JSON.stringify({ scope: ["payment:charge"], ttlSeconds: 300 }),
     });
     const pending = await reqRes.json();
 
@@ -313,8 +332,8 @@ describe("POST /auth/login and requireSession", () => {
   it("refuses to approve a request with no session at all", async () => {
     const reqRes = await fetch(`${baseUrl}/requests`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ subject: "auth-test-agent", scope: ["email:send"], ttlSeconds: 300 }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+      body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300 }),
     });
     const pending = await reqRes.json();
 
@@ -329,8 +348,8 @@ describe("POST /auth/login and requireSession", () => {
   it("refuses to approve a request with a tampered/invalid session token", async () => {
     const reqRes = await fetch(`${baseUrl}/requests`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ subject: "auth-test-agent-2", scope: ["email:send"], ttlSeconds: 300 }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+      body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300 }),
     });
     const pending = await reqRes.json();
 
@@ -347,8 +366,8 @@ describe("POST /auth/login and requireSession", () => {
   it("derives the audit trail's approver from the real session, ignoring any approver the client sends", async () => {
     const reqRes = await fetch(`${baseUrl}/requests`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ subject: "auth-test-agent-3", scope: ["email:send"], ttlSeconds: 300 }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+      body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300 }),
     });
     const pending = await reqRes.json();
     const sessionToken = await login();
@@ -366,5 +385,89 @@ describe("POST /auth/login and requireSession", () => {
       expect.objectContaining({ requestId: pending.id, decision: "request_approved", actor: TEST_ADMIN_USERNAME }),
     );
     expect(entries.some((e) => e.actor === "someone-else-entirely")).toBe(false);
+  });
+});
+
+// ADR-009 hardening: closes requester-identity spoofing. Verified over
+// real HTTP against the actual registration route and the actual
+// credential gate, not the underlying primitives in isolation (those
+// already have their own unit tests in agentIdentity.test.ts).
+describe("POST /agent-identities and requireAgentCredential", () => {
+  it("refuses to register an agent identity without an operator session", async () => {
+    const res = await fetch(`${baseUrl}/agent-identities`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subject: "unauthorized-registration-attempt" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("registers a real agent identity, returning a credential exactly once", async () => {
+    const sessionToken = await login();
+    const res = await fetch(`${baseUrl}/agent-identities`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({ subject: "billing-agent-registration-test" }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.subject).toBe("billing-agent-registration-test");
+    expect(typeof body.credential).toBe("string");
+    expect(body.credential.startsWith(`${body.id}.`)).toBe(true);
+  });
+
+  it("GET /agent-identities lists metadata but never the credential", async () => {
+    const sessionToken = await login();
+    await fetch(`${baseUrl}/agent-identities`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({ subject: "listing-test-agent" }),
+    });
+
+    const listRes = await fetch(`${baseUrl}/agent-identities`, { headers: { authorization: `Bearer ${sessionToken}` } });
+    const list: Array<Record<string, unknown>> = await listRes.json();
+    const entry = list.find((i) => i.subject === "listing-test-agent");
+    expect(entry).toBeDefined();
+    expect(entry).not.toHaveProperty("credential");
+    expect(entry).not.toHaveProperty("secretHash");
+  });
+
+  it("refuses to submit a request with no agent credential at all", async () => {
+    const res = await fetch(`${baseUrl}/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300 }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("refuses to submit a request with a malformed or unknown agent credential", async () => {
+    const res = await fetch(`${baseUrl}/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer not-a-real-credential" },
+      body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300 }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  // The actual point: subject is the real, registered identity — never
+  // something the caller could just type in.
+  it("derives subject from the real agent credential, ignoring any subject the client sends", async () => {
+    const sessionToken = await login();
+    const registerRes = await fetch(`${baseUrl}/agent-identities`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({ subject: "real-registered-agent" }),
+    });
+    const { credential } = await registerRes.json();
+
+    const reqRes = await fetch(`${baseUrl}/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${credential}` },
+      // A malicious or confused client trying to claim a different identity.
+      body: JSON.stringify({ subject: "someone-else-entirely", scope: ["email:send"], ttlSeconds: 300 }),
+    });
+    const pending = await reqRes.json();
+    expect(pending.subject).toBe("real-registered-agent");
   });
 });

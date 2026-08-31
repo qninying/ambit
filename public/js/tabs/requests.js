@@ -15,13 +15,22 @@ export function renderRequests(main, tick) {
     <div class="panel">
       <div class="panel-header"><h3>Submit a test request</h3></div>
       <div class="panel-body padded">
-        <p class="page-desc mt-0" style="margin-bottom:12px;">Stands in for the client SDK — a real agent would submit this programmatically via <code>sdk/ambitClient.ts</code>.</p>
+        <p class="page-desc mt-0" style="margin-bottom:12px;">Stands in for the client SDK — a real agent would submit this programmatically via <code>sdk/ambitClient.ts</code>. Requires a real, registered agent credential — subject is derived from it, never typed in (see ADR-012).</p>
         <div class="form-row">
-          <div class="field"><label>Subject</label><input id="req-subject" placeholder="agent-42" /></div>
+          <div class="field" style="flex:2;"><label>Agent credential</label><input id="req-credential" placeholder="paste a registered agent's credential, or register one below" /></div>
           <div class="field"><label>Scope (comma-separated)</label><input id="req-scope" placeholder="email:send, crm:read" /></div>
         </div>
         <div class="form-row">
           <div class="field" style="max-width:200px;"><label>TTL (seconds)</label><input id="req-ttl" placeholder="300" /></div>
+        </div>
+        <hr class="section-divider" />
+        <div class="field">
+          <label>Register a new test agent (needs your own operator login)</label>
+          <div class="form-row">
+            <div class="field"><input id="new-agent-subject" placeholder="e.g. billing-agent" /></div>
+            <button class="btn btn-secondary btn-sm" id="register-agent-btn" style="align-self:flex-start;">Register + fill credential</button>
+          </div>
+          <div class="toast" id="register-agent-toast"></div>
         </div>
         <button class="btn btn-primary" id="req-submit">Submit request</button>
         <div class="toast" id="req-toast"></div>
@@ -60,6 +69,43 @@ export function renderRequests(main, tick) {
   }
 
   document.getElementById("req-submit").addEventListener("click", () => submitTestRequest(tick));
+  document.getElementById("register-agent-btn").addEventListener("click", registerTestAgent);
+}
+
+// ADR-012: registers a real agent identity via the real POST /agent-identities
+// route, using the operator's own session — then fills the credential field
+// so the demo stays functional without secretly bypassing the mechanism it's
+// supposed to be exercising.
+async function registerTestAgent() {
+  const toast = document.getElementById("register-agent-toast");
+  const subject = document.getElementById("new-agent-subject").value.trim();
+  if (!currentUsername()) {
+    toast.textContent = "Log in first — top right.";
+    toast.className = "toast error";
+    return;
+  }
+  if (!subject) {
+    toast.textContent = "Give the new agent a subject name first.";
+    toast.className = "toast error";
+    return;
+  }
+  try {
+    const { credential } = await postJson("/agent-identities", { subject });
+    const credentialField = document.getElementById("req-credential");
+    credentialField.value = credential;
+    // Registering logs an audit-log entry, which can make the next poll
+    // tick see changed data — and with nothing focused, formFieldIsFocused()
+    // wouldn't protect this freshly-filled field from being wiped by the
+    // resulting re-render. Focus it so it's protected like any field the
+    // operator typed into directly.
+    credentialField.focus();
+    toast.textContent = `Registered "${subject}" — credential filled in above.`;
+    toast.className = "toast ok";
+  } catch (err) {
+    updateAuthWidget(); // in case postJson cleared an expired session on a 401
+    toast.textContent = err.message;
+    toast.className = "toast error";
+  }
 }
 
 async function decideRequest(id, action, tick) {
@@ -106,12 +152,22 @@ async function decideRequest(id, action, tick) {
 }
 
 async function submitTestRequest(tick) {
-  const subject = document.getElementById("req-subject").value.trim();
+  const credential = document.getElementById("req-credential").value.trim();
   const scope = document.getElementById("req-scope").value.split(",").map((s) => s.trim()).filter(Boolean);
   const ttlSeconds = Number(document.getElementById("req-ttl").value);
   const toast = document.getElementById("req-toast");
+  if (!credential) {
+    toast.textContent = "Paste an agent credential first — register one below if you don't have one.";
+    toast.className = "toast error";
+    return;
+  }
   try {
-    await postJson("/requests", { subject, scope, ttlSeconds });
+    // Authenticates as the agent (ADR-012), not the console's own operator
+    // session — subject is derived server-side from the credential, never
+    // sent by this form. Authorization can only carry one value, so this
+    // overrides state.js's default of attaching the operator's session
+    // token to every POST.
+    await postJson("/requests", { scope, ttlSeconds }, { Authorization: `Bearer ${credential}` });
   } catch (err) {
     toast.textContent = err.message;
     toast.className = "toast error";

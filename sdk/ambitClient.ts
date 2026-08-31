@@ -9,6 +9,12 @@
 export interface AmbitClientConfig {
   // Base URL of a running Ambit server, e.g. "http://localhost:4000".
   baseUrl: string;
+  // ADR-009 hardening: the credential an operator issued via
+  // POST /agent-identities (shape "<agentId>.<secret>"), shown once at
+  // registration. Required for requestToken() — without it, "subject" has
+  // nothing real to derive from. Not needed for getRequest(), which was
+  // never gated.
+  agentCredential?: string;
   timeoutMs?: number;
   maxAttempts?: number;
   retryDelayMs?: number;
@@ -29,8 +35,12 @@ export class AmbitClientError extends Error {
   }
 }
 
+// ADR-009 hardening: subject is deliberately absent — it's derived
+// server-side from the agentCredential configured on the client, never
+// something the caller specifies per-call. Same reasoning as policyId
+// having already been removed from the equivalent server-side type
+// (ADR-010): a caller-supplied identity for itself isn't a real identity.
 export interface RequestTokenParams {
-  subject: string;
   scope: string[];
   ttlSeconds: number;
   policyId?: string;
@@ -58,12 +68,14 @@ function sleep(ms: number): Promise<void> {
 
 export class AmbitClient {
   #baseUrl: string;
+  #agentCredential?: string;
   #timeoutMs: number;
   #maxAttempts: number;
   #retryDelayMs: number;
 
   constructor(config: AmbitClientConfig) {
     this.#baseUrl = config.baseUrl.replace(/\/+$/, "");
+    this.#agentCredential = config.agentCredential;
     this.#timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#maxAttempts = config.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
     this.#retryDelayMs = config.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
@@ -76,27 +88,41 @@ export class AmbitClient {
   // makes exactly one attempt in that case rather than guess.
   async requestToken(params: RequestTokenParams): Promise<RemoteRequest> {
     const attempts = params.idempotencyKey ? this.#maxAttempts : 1;
-    return this.#send("POST", "/requests", params, attempts);
+    return this.#send("POST", "/requests", params, attempts, true);
   }
 
   // The other half of "request and present tokens" — once a request stops
   // being pending, this is how the SDK finds out what happened to it, and
   // (once approved) the tokenId to present. Idempotent by nature (a GET),
-  // so always safe to retry up to the configured cap.
+  // so always safe to retry up to the configured cap. Never gated, so no
+  // credential needed here.
   async getRequest(id: string): Promise<RemoteRequest> {
-    return this.#send("GET", `/requests/${encodeURIComponent(id)}`, undefined, this.#maxAttempts);
+    return this.#send("GET", `/requests/${encodeURIComponent(id)}`, undefined, this.#maxAttempts, false);
   }
 
-  async #send(method: string, path: string, body: unknown, maxAttempts: number): Promise<any> {
+  async #send(method: string, path: string, body: unknown, maxAttempts: number, requiresAgentCredential: boolean): Promise<any> {
     let lastError: AmbitClientError | undefined;
+
+    if (requiresAgentCredential && !this.#agentCredential) {
+      // Fail fast, client-side, with a message that actually says what's
+      // missing — rather than let this become a confusing 401 from the
+      // server for something the SDK could tell the caller immediately.
+      throw new AmbitClientError(
+        `${method} ${path} requires an agentCredential — configure one via AmbitClientConfig (get one from POST /agent-identities)`,
+        0,
+      );
+    }
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
       try {
+        const headers: Record<string, string> = {};
+        if (body !== undefined) headers["content-type"] = "application/json";
+        if (requiresAgentCredential && this.#agentCredential) headers.authorization = `Bearer ${this.#agentCredential}`;
         const response = await fetch(`${this.#baseUrl}${path}`, {
           method,
-          headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+          headers,
           body: body !== undefined ? JSON.stringify(body) : undefined,
           signal: controller.signal,
         });
