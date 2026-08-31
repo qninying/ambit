@@ -19,9 +19,9 @@ describe("accessMockEndpoint", () => {
   // mock endpoint, then the action is allowed."
   it("allows and calls the endpoint for a valid, in-scope token", async () => {
     const { store, auditLog, registry } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
 
-    const result = await accessMockEndpoint(token.id, "email", "send", store, auditLog, registry, FAST_CONFIG);
+    const result = await accessMockEndpoint(token.id, secret, "email", "send", store, auditLog, registry, FAST_CONFIG);
 
     expect(result).toEqual({
       allowed: true,
@@ -34,9 +34,9 @@ describe("accessMockEndpoint", () => {
   // entries: the gateway's decision, and the integration's outcome.
   it("logs both the gateway decision and the endpoint outcome", async () => {
     const { store, auditLog, registry } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
 
-    await accessMockEndpoint(token.id, "email", "send", store, auditLog, registry, FAST_CONFIG);
+    await accessMockEndpoint(token.id, secret, "email", "send", store, auditLog, registry, FAST_CONFIG);
 
     const entries = auditLog.entries();
     expect(entries).toHaveLength(2);
@@ -45,25 +45,39 @@ describe("accessMockEndpoint", () => {
     expect(entries[1]).toMatchObject({ action: "email:send", decision: "allowed", outcome: "success" });
   });
 
-  // Acceptance: "Given an invalid token, when used, then denied." Three real
+  // Acceptance: "Given an invalid token, when used, then denied." Four real
   // ways a token can be invalid, none of which should ever reach the endpoint.
   it("denies an unknown token id and never calls the endpoint", async () => {
     const { store, auditLog, registry } = setup();
     const spy = vi.spyOn(registry, "call");
 
-    const result = await accessMockEndpoint("not-a-real-id", "email", "send", store, auditLog, registry, FAST_CONFIG);
+    const result = await accessMockEndpoint("not-a-real-id", "irrelevant-secret", "email", "send", store, auditLog, registry, FAST_CONFIG);
 
     expect(result).toEqual({ allowed: false, reasonCode: "unknown_token" });
     expect(spy).not.toHaveBeenCalled();
   });
 
+  // ADR-013: knowing a token's id is not enough — enforceToken (which this
+  // wraps) requires proof of possession before anything else, including
+  // whether the endpoint gets called at all.
+  it("denies with invalid_credential when the wrong secret is provided, and never calls the endpoint", async () => {
+    const { store, auditLog, registry } = setup();
+    const { token } = await issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
+    const spy = vi.spyOn(registry, "call");
+
+    const result = await accessMockEndpoint(token.id, "wrong-secret", "email", "send", store, auditLog, registry, FAST_CONFIG);
+
+    expect(result).toEqual({ allowed: false, reasonCode: "invalid_credential" });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("denies a revoked token and never calls the endpoint", async () => {
     const { store, auditLog, registry } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
     revokeToken(token.id, store, auditLog, "compromised");
     const spy = vi.spyOn(registry, "call");
 
-    const result = await accessMockEndpoint(token.id, "email", "send", store, auditLog, registry, FAST_CONFIG);
+    const result = await accessMockEndpoint(token.id, secret, "email", "send", store, auditLog, registry, FAST_CONFIG);
 
     expect(result).toEqual({ allowed: false, reasonCode: "revoked" });
     expect(spy).not.toHaveBeenCalled();
@@ -71,10 +85,10 @@ describe("accessMockEndpoint", () => {
 
   it("denies a token that lacks the scope for this action and never calls the endpoint", async () => {
     const { store, auditLog, registry } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["crm:read"], ttlSeconds: 300 }, store);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["crm:read"], ttlSeconds: 300 }, store);
     const spy = vi.spyOn(registry, "call");
 
-    const result = await accessMockEndpoint(token.id, "payment", "charge", store, auditLog, registry, FAST_CONFIG);
+    const result = await accessMockEndpoint(token.id, secret, "payment", "charge", store, auditLog, registry, FAST_CONFIG);
 
     expect(result).toEqual({ allowed: false, reasonCode: "out_of_scope" });
     expect(spy).not.toHaveBeenCalled();
@@ -82,7 +96,7 @@ describe("accessMockEndpoint", () => {
 
   it("does not log an outcome entry for a denied access — only the gateway's own denial", async () => {
     const { store, auditLog, registry } = setup();
-    await accessMockEndpoint("not-a-real-id", "email", "send", store, auditLog, registry, FAST_CONFIG);
+    await accessMockEndpoint("not-a-real-id", "irrelevant-secret", "email", "send", store, auditLog, registry, FAST_CONFIG);
 
     expect(auditLog.entries()).toHaveLength(1);
     expect(auditLog.entries()[0]?.outcome).toBeUndefined();
@@ -92,11 +106,11 @@ describe("accessMockEndpoint", () => {
   // valid token through; the failure is downstream, and is what gets logged.
   it("logs an unreachable outcome, after retrying, when the endpoint is down", async () => {
     const { store, auditLog, registry } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["payment:charge"], ttlSeconds: 300 }, store);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["payment:charge"], ttlSeconds: 300 }, store);
     registry.setDown("payment", true);
     const spy = vi.spyOn(registry, "call");
 
-    const result = await accessMockEndpoint(token.id, "payment", "charge", store, auditLog, registry, FAST_CONFIG);
+    const result = await accessMockEndpoint(token.id, secret, "payment", "charge", store, auditLog, registry, FAST_CONFIG);
 
     expect(result).toEqual({ allowed: true, outcome: "unreachable" });
     expect(spy).toHaveBeenCalledTimes(FAST_CONFIG.maxAttempts);
@@ -106,7 +120,7 @@ describe("accessMockEndpoint", () => {
 
   it("recovers on retry if the endpoint comes back up between attempts", async () => {
     const { store, auditLog, registry } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["crm:read"], ttlSeconds: 300 }, store);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["crm:read"], ttlSeconds: 300 }, store);
     registry.setDown("crm", true);
     const spy = vi.spyOn(registry, "call").mockImplementationOnce(async () => {
       throw new Error("down for this call only");
@@ -114,7 +128,7 @@ describe("accessMockEndpoint", () => {
     // Second call onward uses the real (now not-down) implementation.
     registry.setDown("crm", false);
 
-    const result = await accessMockEndpoint(token.id, "crm", "read", store, auditLog, registry, FAST_CONFIG);
+    const result = await accessMockEndpoint(token.id, secret, "crm", "read", store, auditLog, registry, FAST_CONFIG);
 
     expect(result.allowed).toBe(true);
     if (result.allowed) expect(result.outcome).toBe("success");

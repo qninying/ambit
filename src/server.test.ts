@@ -169,24 +169,32 @@ describe("GET /circuit-breaker — unaffected by the admin gate (read-only, inte
 // POST to /redaction-rules create a trivially weak rule and select it,
 // bypassing redaction regardless of caller auth. The route ignores
 // redactionRuleId entirely; this proves it, over real HTTP.
-describe("POST /tokens/:id/customer-data/:customerId — ignores a caller-supplied redactionRuleId", () => {
-  async function issueTestToken(scope: string[]): Promise<string> {
-    const reqRes = await fetch(`${baseUrl}/requests`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
-      body: JSON.stringify({ scope, ttlSeconds: 300 }),
-    });
-    const { id: requestId } = await reqRes.json();
-    const sessionToken = await login();
-    const approveRes = await fetch(`${baseUrl}/requests/${requestId}/approve`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
-      body: JSON.stringify({}),
-    });
-    const token = await approveRes.json();
-    return token.id;
-  }
+// ADR-013: the real, end-to-end flow a caller actually goes through to get
+// a usable {tokenId, secret} — submit as the agent, approve as the
+// operator, then claim the secret back as that same agent. Shared by every
+// describe block below that needs a real token to exercise a possession-
+// checked route against.
+async function issueTestToken(scope: string[], agentCredential = defaultAgentCredential): Promise<{ tokenId: string; secret: string }> {
+  const reqRes = await fetch(`${baseUrl}/requests`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${agentCredential}` },
+    body: JSON.stringify({ scope, ttlSeconds: 300 }),
+  });
+  const { id: requestId } = await reqRes.json();
+  const sessionToken = await login();
+  await fetch(`${baseUrl}/requests/${requestId}/approve`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify({}),
+  });
+  const claimRes = await fetch(`${baseUrl}/requests/${requestId}/token-secret`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${agentCredential}` },
+  });
+  return claimRes.json();
+}
 
+describe("POST /tokens/:id/customer-data/:customerId — ignores a caller-supplied redactionRuleId", () => {
   it("still redacts ssn even when the request body supplies a rule id crafted to require only baseline scope", async () => {
     // A malicious/naive rule requiring only "customer:read" — the SAME
     // scope already needed for baseline access — for ssn. If the route
@@ -198,10 +206,10 @@ describe("POST /tokens/:id/customer-data/:customerId — ignores a caller-suppli
     });
     const weakRule = await weakRuleRes.json();
 
-    const tokenId = await issueTestToken(["customer:read"]);
+    const { tokenId, secret } = await issueTestToken(["customer:read"]);
     const res = await fetch(`${baseUrl}/tokens/${tokenId}/customer-data/cust-001`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
       body: JSON.stringify({ redactionRuleId: weakRule.id }),
     });
     const result = await res.json();
@@ -469,5 +477,187 @@ describe("POST /agent-identities and requireAgentCredential", () => {
     });
     const pending = await reqRes.json();
     expect(pending.subject).toBe("real-registered-agent");
+  });
+});
+
+async function registerAgent(subject: string): Promise<string> {
+  const sessionToken = await login();
+  const res = await fetch(`${baseUrl}/agent-identities`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify({ subject }),
+  });
+  const { credential } = await res.json();
+  return credential;
+}
+
+// ADR-013: token possession proof, verified over real HTTP — the same
+// standard every other trust boundary in this file is held to. Unit tests
+// in token.test.ts/tokenRequest.test.ts already cover the primitives in
+// isolation; this proves the whole real chain a caller actually goes
+// through: submit → approve → claim → use.
+describe("ADR-013: token possession proof", () => {
+  it("POST /tokens/:id/enforce allows with the real secret and denies with an invalid_credential when it's wrong", async () => {
+    const { tokenId, secret } = await issueTestToken(["email:send"]);
+
+    const wrongRes = await fetch(`${baseUrl}/tokens/${tokenId}/enforce`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer wrong-secret" },
+      body: JSON.stringify({ action: "email:send" }),
+    });
+    const wrongDecision = await wrongRes.json();
+    expect(wrongDecision).toMatchObject({ allowed: false, reasonCode: "invalid_credential" });
+
+    const rightRes = await fetch(`${baseUrl}/tokens/${tokenId}/enforce`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
+      body: JSON.stringify({ action: "email:send" }),
+    });
+    expect(await rightRes.json()).toEqual({ allowed: true });
+  });
+
+  it("GET /tokens never leaks secretHash, and GET /requests/:id never leaks the claimable tokenSecret", async () => {
+    await issueTestToken(["email:send"]);
+
+    const tokens: Array<Record<string, unknown>> = await fetch(`${baseUrl}/tokens`).then((r) => r.json());
+    expect(tokens.length).toBeGreaterThan(0);
+    for (const t of tokens) expect(t).not.toHaveProperty("secretHash");
+
+    const reqRes = await fetch(`${baseUrl}/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+      body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300 }),
+    });
+    const pending = await reqRes.json();
+    const sessionToken = await login();
+    await fetch(`${baseUrl}/requests/${pending.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({}),
+    });
+
+    const fetched = await fetch(`${baseUrl}/requests/${pending.id}`).then((r) => r.json());
+    expect(fetched.status).toBe("approved");
+    expect(fetched).not.toHaveProperty("tokenSecret");
+  });
+
+  describe("POST /requests/:id/token-secret", () => {
+    it("refuses with 401 when no agent credential is provided", async () => {
+      const reqRes = await fetch(`${baseUrl}/requests`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+        body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300 }),
+      });
+      const pending = await reqRes.json();
+
+      const res = await fetch(`${baseUrl}/requests/${pending.id}/token-secret`, { method: "POST" });
+      expect(res.status).toBe(401);
+    });
+
+    it("refuses with 403 when the credential belongs to a different subject than the one who submitted the request", async () => {
+      const impostorCredential = await registerAgent("token-secret-impostor");
+      const reqRes = await fetch(`${baseUrl}/requests`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+        body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300 }),
+      });
+      const pending = await reqRes.json();
+      const sessionToken = await login();
+      await fetch(`${baseUrl}/requests/${pending.id}/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify({}),
+      });
+
+      const res = await fetch(`${baseUrl}/requests/${pending.id}/token-secret`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${impostorCredential}` },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it("refuses with 409 when the request has not been approved yet", async () => {
+      const reqRes = await fetch(`${baseUrl}/requests`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+        body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300 }),
+      });
+      const pending = await reqRes.json();
+
+      const res = await fetch(`${baseUrl}/requests/${pending.id}/token-secret`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${defaultAgentCredential}` },
+      });
+      expect(res.status).toBe(409);
+    });
+
+    it("refuses with 410 on a second claim — the secret can only be retrieved once", async () => {
+      const reqRes = await fetch(`${baseUrl}/requests`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${defaultAgentCredential}` },
+        body: JSON.stringify({ scope: ["email:send"], ttlSeconds: 300 }),
+      });
+      const pending = await reqRes.json();
+      const sessionToken = await login();
+      await fetch(`${baseUrl}/requests/${pending.id}/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify({}),
+      });
+      const claim = () =>
+        fetch(`${baseUrl}/requests/${pending.id}/token-secret`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${defaultAgentCredential}` },
+        });
+
+      expect((await claim()).status).toBe(200);
+      expect((await claim()).status).toBe(410);
+    });
+  });
+
+  it("POST /tokens/:id/delegate requires the parent's secret and hands back the child's, once, on success", async () => {
+    const { tokenId: parentId, secret: parentSecret } = await issueTestToken(["email:send", "payment:charge"]);
+
+    const wrongRes = await fetch(`${baseUrl}/tokens/${parentId}/delegate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer wrong-secret" },
+      body: JSON.stringify({ subject: "subagent-http-test", scope: ["email:send"], ttlSeconds: 60 }),
+    });
+    expect(await wrongRes.json()).toEqual({ approved: false, reasonCode: "invalid_credential" });
+
+    const rightRes = await fetch(`${baseUrl}/tokens/${parentId}/delegate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${parentSecret}` },
+      body: JSON.stringify({ subject: "subagent-http-test", scope: ["email:send"], ttlSeconds: 60 }),
+    });
+    const decision = await rightRes.json();
+    expect(decision.approved).toBe(true);
+    expect(typeof decision.secret).toBe("string");
+    expect(decision.token).not.toHaveProperty("secretHash");
+
+    // The returned secret genuinely works against the newly minted child.
+    const enforceRes = await fetch(`${baseUrl}/tokens/${decision.token.id}/enforce`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${decision.secret}` },
+      body: JSON.stringify({ action: "email:send" }),
+    });
+    expect(await enforceRes.json()).toEqual({ allowed: true });
+  });
+
+  // Deliberate scope boundary: revocation is a management action, not a use
+  // of the token's authority, so it stays unauthenticated — same treatment
+  // ADR-009 already gives every other still-open route.
+  it("POST /tokens/:id/revoke remains reachable with no credential at all — deliberately out of this ADR's scope", async () => {
+    const { tokenId } = await issueTestToken(["email:send"]);
+
+    const res = await fetch(`${baseUrl}/tokens/${tokenId}/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reasonCode: "no_longer_needed" }),
+    });
+    expect(res.status).toBe(200);
+    const revoked = await res.json();
+    expect(revoked.status).toBe("revoked");
+    expect(revoked).not.toHaveProperty("secretHash");
   });
 });

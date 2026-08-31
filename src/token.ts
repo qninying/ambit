@@ -1,6 +1,8 @@
 // REQ-001: short-lived, narrowly-scoped tokens for AI agents.
+import { randomBytes } from "node:crypto";
 import type { AuditLog } from "./auditLog.js";
 import { CircuitOpenError } from "./circuitBreaker.js";
+import { hashPassword, verifyPassword } from "./passwordHash.js";
 import type { PolicyStore } from "./policy.js";
 import type { TokenStore } from "./tokenStore.js";
 
@@ -40,6 +42,22 @@ export interface Token {
   // consistent with the store being the single source of truth (ADR-001).
   revokedAt?: Date;
   revocationReason?: RevocationReason;
+  // ADR-013: token possession proof. `id` is a public identifier — it
+  // appears in GET /tokens, the audit log, and every denial message; it
+  // was never meant to also BE the bearer credential, but until this ADR
+  // it was the only thing enforceToken/delegateToken/etc. checked. Only
+  // the scrypt hash is ever persisted; the plaintext secret exists for one
+  // response only (see issueToken below), never logged, never listed.
+  secretHash: string;
+}
+
+// The plaintext secret exists only in this return value, for the one
+// response that hands it to whoever is entitled to hold it — the same
+// one-time-handback shape as registerAgentIdentity (ADR-012). Never
+// reconstructable afterward; only secretHash survives in the store.
+export interface IssuedToken {
+  token: Token;
+  secret: string;
 }
 
 export class InvalidScopeError extends Error {
@@ -59,7 +77,7 @@ export class UnknownTokenError extends Error {
 // Issuing a token means it's real from this point on — the store is what
 // enforceToken and revokeToken check against later, not this return value.
 // The caller still gets the Token back (e.g. to hand to whoever asked for it).
-export function issueToken(request: TokenRequest, store: TokenStore, policyStore?: PolicyStore): Token {
+export async function issueToken(request: TokenRequest, store: TokenStore, policyStore?: PolicyStore): Promise<IssuedToken> {
   if (request.scope.length === 0) {
     throw new InvalidScopeError("scope must include at least one permission");
   }
@@ -102,6 +120,12 @@ export function issueToken(request: TokenRequest, store: TokenStore, policyStore
     }
   }
 
+  // ADR-013: generated fresh per issuance, never derived from the token's
+  // own id — a UUID is public (it's how the token is addressed everywhere),
+  // so it can never double as proof of possession.
+  const secret = randomBytes(32).toString("hex");
+  const secretHash = await hashPassword(secret);
+
   const token: Token = {
     id: crypto.randomUUID(),
     subject: request.subject,
@@ -110,9 +134,10 @@ export function issueToken(request: TokenRequest, store: TokenStore, policyStore
     expiresAt,
     status: "active",
     parentTokenId: request.parentTokenId,
+    secretHash,
   };
   store.save(token);
-  return token;
+  return { token, secret };
 }
 
 // REQ-004: validate token scope and revocation status in real-time at the
@@ -129,7 +154,7 @@ export type EnforcementDecision =
   | { allowed: true }
   | {
       allowed: false;
-      reasonCode: "revoked" | "expired" | "out_of_scope" | "unknown_token" | "store_unavailable";
+      reasonCode: "revoked" | "expired" | "out_of_scope" | "unknown_token" | "store_unavailable" | "invalid_credential";
       message: string;
     };
 
@@ -137,13 +162,24 @@ export type EnforcementDecision =
 // store, so a revocation that happened a moment ago is guaranteed to be seen
 // on this call. Passing a Token object here would let a caller re-check a
 // stale copy and get a stale answer, which defeats the point of REQ-015.
-export function enforceToken(
+//
+// ADR-013: providedSecret is checked BEFORE any other detail about the
+// token is examined or disclosed. This is deliberate, not incidental — the
+// old behavior let anyone who merely knew a token's id (public: it's in
+// every audit entry and GET /tokens) see its full status (revoked when and
+// why, real expiry, real scope) via a detailed denial message, regardless
+// of whether they were ever its rightful holder. Proving possession first
+// means an unverified caller learns nothing about the token beyond "that
+// credential doesn't work" — closing the possession gap also closes this
+// disclosure gap, for free.
+export async function enforceToken(
   tokenId: string,
+  providedSecret: string,
   action: string,
   store: TokenStore,
   auditLog: AuditLog,
   now: Date = new Date(),
-): EnforcementDecision {
+): Promise<EnforcementDecision> {
   let token;
   try {
     token = store.get(tokenId);
@@ -164,6 +200,13 @@ export function enforceToken(
     const message = `No token found with id "${tokenId}" — either it was never issued, the id is incorrect, or this process has restarted since it was issued (state is in-memory and does not persist across restarts — see ADR-006).`;
     auditLog.record({ tokenId, subject: "unknown", action, decision: "denied", reasonCode: "unknown_token", message }, now);
     return { allowed: false, reasonCode: "unknown_token", message };
+  }
+
+  const possessed = await verifyPassword(providedSecret, token.secretHash);
+  if (!possessed) {
+    const message = `The credential provided does not match token "${tokenId}" — either it is wrong or missing, or the caller is not this token's rightful holder. No further detail about this token is disclosed to an unverified caller.`;
+    auditLog.record({ tokenId, subject: token.subject, action, decision: "denied", reasonCode: "invalid_credential", message }, now);
+    return { allowed: false, reasonCode: "invalid_credential", message };
   }
 
   const decision = decide(token, action, now);

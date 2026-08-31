@@ -23,11 +23,11 @@ function setup() {
 describe("accessCustomerData", () => {
   // Acceptance: "Given a request for customer data, when the data is
   // accessed, then sensitive fields are redacted."
-  it("allows access and redacts fields the token's scope doesn't grant", () => {
+  it("allows access and redacts fields the token's scope doesn't grant", async () => {
     const { tokenStore, auditLog, customerRegistry, redactionRuleStore, rule } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
 
-    const result = accessCustomerData(token.id, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
+    const result = await accessCustomerData(token.id, secret, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
 
     if (!result.allowed) throw new Error("expected access to be allowed");
     expect(result.data.ssn).toBe("[REDACTED]");
@@ -36,14 +36,14 @@ describe("accessCustomerData", () => {
     expect(result.redactedFields.sort()).toEqual(["email", "ssn"]);
   });
 
-  it("un-redacts exactly the fields the token has elevated scope for", () => {
+  it("un-redacts exactly the fields the token has elevated scope for", async () => {
     const { tokenStore, auditLog, customerRegistry, redactionRuleStore, rule } = setup();
-    const token = issueToken(
+    const { token, secret } = await issueToken(
       { subject: "agent-42", scope: ["customer:read", "customer:read:ssn"], ttlSeconds: 300 },
       tokenStore,
     );
 
-    const result = accessCustomerData(token.id, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
+    const result = await accessCustomerData(token.id, secret, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
 
     if (!result.allowed) throw new Error("expected access to be allowed");
     expect(result.data.ssn).not.toBe("[REDACTED]");
@@ -53,12 +53,12 @@ describe("accessCustomerData", () => {
   // Acceptance: "Given a request for customer data, when the request lacks
   // proper authorization, then access is denied." Reuses enforceToken as-is
   // — nothing about REQ-004/006/018's guardrails is reimplemented here.
-  it("denies access when the token lacks the customer:read scope, and never reaches the customer registry", () => {
+  it("denies access when the token lacks the customer:read scope, and never reaches the customer registry", async () => {
     const { tokenStore, auditLog, customerRegistry, redactionRuleStore, rule } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
     const spy = vi.spyOn(customerRegistry, "get");
 
-    const result = accessCustomerData(token.id, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
+    const result = await accessCustomerData(token.id, secret, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
 
     expect(result.allowed).toBe(false);
     if (result.allowed) throw new Error("unreachable");
@@ -67,20 +67,35 @@ describe("accessCustomerData", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("denies access for an unknown token id", () => {
+  it("denies access for an unknown token id", async () => {
     const { tokenStore, auditLog, customerRegistry, redactionRuleStore, rule } = setup();
-    const result = accessCustomerData("not-a-real-token", "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
+    const result = await accessCustomerData("not-a-real-token", "irrelevant-secret", "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
 
     expect(result.allowed).toBe(false);
     if (result.allowed) throw new Error("unreachable");
     expect(result.reasonCode).toBe("unknown_token");
   });
 
-  it("denies access for an unknown customer id, even with a fully valid, authorized token", () => {
+  // ADR-013: knowing a token's id is not enough — the coarse enforceToken
+  // gate this route delegates to now requires proof of possession first.
+  it("denies access with invalid_credential when the wrong secret is provided, and never reaches the customer registry", async () => {
     const { tokenStore, auditLog, customerRegistry, redactionRuleStore, rule } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
+    const { token } = await issueToken({ subject: "agent-42", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
+    const spy = vi.spyOn(customerRegistry, "get");
 
-    const result = accessCustomerData(token.id, "not-a-real-customer", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
+    const result = await accessCustomerData(token.id, "wrong-secret", "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
+
+    expect(result.allowed).toBe(false);
+    if (result.allowed) throw new Error("unreachable");
+    expect(result.reasonCode).toBe("invalid_credential");
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("denies access for an unknown customer id, even with a fully valid, authorized token", async () => {
+    const { tokenStore, auditLog, customerRegistry, redactionRuleStore, rule } = setup();
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
+
+    const result = await accessCustomerData(token.id, secret, "not-a-real-customer", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
 
     expect(result.allowed).toBe(false);
     if (result.allowed) throw new Error("unreachable");
@@ -90,11 +105,11 @@ describe("accessCustomerData", () => {
   // Failure path: "Redaction rule misconfiguration" — the security-critical
   // case. A rule that can't be resolved must deny the whole request, never
   // fall back to returning the record unredacted.
-  it("fails closed — denies access — when the redaction rule id cannot be resolved, rather than returning unredacted data", () => {
+  it("fails closed — denies access — when the redaction rule id cannot be resolved, rather than returning unredacted data", async () => {
     const { tokenStore, auditLog, customerRegistry, redactionRuleStore } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
 
-    const result = accessCustomerData(token.id, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, "not-a-real-rule-id");
+    const result = await accessCustomerData(token.id, secret, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, "not-a-real-rule-id");
 
     expect(result.allowed).toBe(false);
     if (result.allowed) throw new Error("unreachable");
@@ -104,11 +119,11 @@ describe("accessCustomerData", () => {
 
   // Trust: "the access and redaction actions are logged" — two entries,
   // deliberately (ADR-005's "decision separate from outcome" pattern).
-  it("logs both the access decision and the redaction outcome as two separate entries", () => {
+  it("logs both the access decision and the redaction outcome as two separate entries", async () => {
     const { tokenStore, auditLog, customerRegistry, redactionRuleStore, rule } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
 
-    accessCustomerData(token.id, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
+    await accessCustomerData(token.id, secret, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
 
     const entries = auditLog.entries().filter((e) => e.tokenId === token.id);
     expect(entries).toContainEqual(expect.objectContaining({ decision: "allowed", action: "customer:read" }));
@@ -117,11 +132,11 @@ describe("accessCustomerData", () => {
     );
   });
 
-  it("logs a denial (and nothing else) when access is refused, with no data_accessed entry", () => {
+  it("logs a denial (and nothing else) when access is refused, with no data_accessed entry", async () => {
     const { tokenStore, auditLog, customerRegistry, redactionRuleStore, rule } = setup();
-    const token = issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
+    const { token, secret } = await issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
 
-    accessCustomerData(token.id, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
+    await accessCustomerData(token.id, secret, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id);
 
     const entries = auditLog.entries().filter((e) => e.tokenId === token.id);
     expect(entries.some((e) => e.decision === "data_accessed")).toBe(false);

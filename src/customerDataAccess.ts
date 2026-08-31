@@ -16,14 +16,15 @@ export type CustomerDataAccessResult =
   | { allowed: true; data: CustomerRecord; redactedFields: string[] }
   | {
       allowed: false;
-      reasonCode: "revoked" | "expired" | "out_of_scope" | "unknown_token" | "store_unavailable" | "unknown_customer" | "redaction_rule_unavailable";
+      reasonCode: "revoked" | "expired" | "out_of_scope" | "unknown_token" | "store_unavailable" | "invalid_credential" | "unknown_customer" | "redaction_rule_unavailable";
       message: string;
     };
 
 const CUSTOMER_READ_ACTION = "customer:read";
 
-export function accessCustomerData(
+export async function accessCustomerData(
   tokenId: string,
+  providedSecret: string,
   customerId: string,
   tokenStore: TokenStore,
   auditLog: AuditLog,
@@ -31,11 +32,12 @@ export function accessCustomerData(
   redactionRuleStore: RedactionRuleStore,
   redactionRuleId: string,
   now: Date = new Date(),
-): CustomerDataAccessResult {
+): Promise<CustomerDataAccessResult> {
   // The coarse gate. Nothing about REQ-004/REQ-006/REQ-018's guardrails is
   // reimplemented here — a denial from enforceToken (with its own detailed
-  // STORY-010 message) IS the denial for "lacks proper authorization."
-  const decision = enforceToken(tokenId, CUSTOMER_READ_ACTION, tokenStore, auditLog, now);
+  // STORY-010 message, and ADR-013's possession check) IS the denial for
+  // "lacks proper authorization."
+  const decision = await enforceToken(tokenId, providedSecret, CUSTOMER_READ_ACTION, tokenStore, auditLog, now);
   if (!decision.allowed) {
     return decision;
   }

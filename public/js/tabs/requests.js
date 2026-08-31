@@ -4,6 +4,13 @@ import { currentUsername } from "../auth.js";
 import { updateAuthWidget } from "../chrome.js";
 import { confirmAction } from "../confirm.js";
 
+// ADR-013: module-level, not DOM state — a successful submit or claim has
+// to survive the tab's own poll-driven re-renders (tick(true) rebuilds
+// this whole panel from scratch), so the "claim your token" step below
+// stays visible across them instead of vanishing on the next refresh.
+let lastSubmittedRequest = null; // { id, credential }
+let lastClaimedSecret = null; // { tokenId, secret }
+
 export function renderRequests(main, tick) {
   const list = STATE.requests;
   main.innerHTML = `
@@ -36,6 +43,7 @@ export function renderRequests(main, tick) {
         <div class="toast" id="req-toast"></div>
       </div>
     </div>
+    ${renderClaimPanel()}
   `;
 
   const listEl = document.getElementById("requests-list");
@@ -70,6 +78,58 @@ export function renderRequests(main, tick) {
 
   document.getElementById("req-submit").addEventListener("click", () => submitTestRequest(tick));
   document.getElementById("register-agent-btn").addEventListener("click", registerTestAgent);
+  const claimBtn = document.getElementById("claim-secret-btn");
+  if (claimBtn) claimBtn.addEventListener("click", () => claimTokenSecret(tick));
+}
+
+// ADR-013: a token's secret is never handed back synchronously to whoever
+// submitted the request — only claimable afterward, once, by that same
+// agent credential, via the real POST /requests/:id/token-secret route.
+// This panel is what makes that real (not skipped) step visible in the
+// demo rather than silently working around it.
+function renderClaimPanel() {
+  if (lastClaimedSecret) {
+    return `
+      <div class="panel">
+        <div class="panel-header"><h3>Your token secret</h3></div>
+        <div class="panel-body padded">
+          <p class="page-desc mt-0" style="margin-bottom:12px;">Claimed once — this won't be shown again. Paste it into the Tokens tab's "This token's secret" field to delegate from it or access customer data through it.</p>
+          <div class="field"><label>Token ID</label><input readonly value="${esc(lastClaimedSecret.tokenId)}" onclick="this.select()" /></div>
+          <div class="field"><label>Secret</label><input readonly value="${esc(lastClaimedSecret.secret)}" onclick="this.select()" /></div>
+        </div>
+      </div>
+    `;
+  }
+  if (lastSubmittedRequest) {
+    return `
+      <div class="panel">
+        <div class="panel-header"><h3>Claim your token</h3></div>
+        <div class="panel-body padded">
+          <p class="page-desc mt-0" style="margin-bottom:12px;">Request <code>${esc(lastSubmittedRequest.id)}</code> is submitted. Once an approver acts on it above, claim the resulting token's secret here — using the same agent credential, proving you're the one who actually asked.</p>
+          <button class="btn btn-primary btn-sm" id="claim-secret-btn">Claim token secret</button>
+          <div class="toast" id="claim-secret-toast"></div>
+        </div>
+      </div>
+    `;
+  }
+  return "";
+}
+
+async function claimTokenSecret(tick) {
+  const toast = document.getElementById("claim-secret-toast");
+  try {
+    const claimed = await postJson(
+      `/requests/${lastSubmittedRequest.id}/token-secret`,
+      undefined,
+      { Authorization: `Bearer ${lastSubmittedRequest.credential}` },
+    );
+    lastClaimedSecret = claimed;
+    lastSubmittedRequest = null;
+    await tick(true);
+  } catch (err) {
+    toast.textContent = err.message;
+    toast.className = "toast error";
+  }
 }
 
 // ADR-012: registers a real agent identity via the real POST /agent-identities
@@ -161,13 +221,14 @@ async function submitTestRequest(tick) {
     toast.className = "toast error";
     return;
   }
+  let submitted;
   try {
     // Authenticates as the agent (ADR-012), not the console's own operator
     // session — subject is derived server-side from the credential, never
     // sent by this form. Authorization can only carry one value, so this
     // overrides state.js's default of attaching the operator's session
     // token to every POST.
-    await postJson("/requests", { scope, ttlSeconds }, { Authorization: `Bearer ${credential}` });
+    submitted = await postJson("/requests", { scope, ttlSeconds }, { Authorization: `Bearer ${credential}` });
   } catch (err) {
     toast.textContent = err.message;
     toast.className = "toast error";
@@ -175,5 +236,10 @@ async function submitTestRequest(tick) {
   }
   toast.textContent = "Request submitted.";
   toast.className = "toast ok";
+  // ADR-013: remembers which credential to claim this request's token
+  // secret with later — a fresh submission supersedes whatever was
+  // previously claimed/claimable, so the panel doesn't show a stale result.
+  lastSubmittedRequest = { id: submitted.id, credential };
+  lastClaimedSecret = null;
   await tick(true);
 }

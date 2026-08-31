@@ -18,7 +18,7 @@ import { RedactionRuleStore, createRedactionRule } from "./redaction.js";
 import { accessCustomerData } from "./customerDataAccess.js";
 
 describe("REQ-010: distinct reason codes across the real system", () => {
-  it("assigns a distinct, correct reasonCode to denials from unrelated subsystems, and every one is present in the Audit Log", () => {
+  it("assigns a distinct, correct reasonCode to denials from unrelated subsystems, and every one is present in the Audit Log", async () => {
     const auditLog = new AuditLog();
     const tokenStore = new TokenStore();
     const requestStore = new RequestStore();
@@ -29,24 +29,24 @@ describe("REQ-010: distinct reason codes across the real system", () => {
 
     // Acceptance: "Given a denied action due to token expiration, when the
     // action is logged, then the reason code indicates token expiration."
-    const expiredToken = issueToken({ subject: "agent-1", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
-    enforceToken(expiredToken.id, "email:send", tokenStore, auditLog, new Date(expiredToken.expiresAt.getTime() + 1));
+    const { token: expiredToken, secret: expiredSecret } = await issueToken({ subject: "agent-1", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
+    await enforceToken(expiredToken.id, expiredSecret, "email:send", tokenStore, auditLog, new Date(expiredToken.expiresAt.getTime() + 1));
 
     // A handful of other, unrelated denial paths.
-    enforceToken(expiredToken.id, "payment:charge", tokenStore, auditLog, new Date(expiredToken.expiresAt.getTime() - 1)); // out_of_scope, before expiry
-    enforceToken("not-a-real-token", "email:send", tokenStore, auditLog); // unknown_token
+    await enforceToken(expiredToken.id, expiredSecret, "payment:charge", tokenStore, auditLog, new Date(expiredToken.expiresAt.getTime() - 1)); // out_of_scope, before expiry
+    await enforceToken("not-a-real-token", "irrelevant-secret", "email:send", tokenStore, auditLog); // unknown_token
 
-    const shortLivedParent = issueToken({ subject: "agent-2", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
-    delegateToken(shortLivedParent.id, "sub-agent", ["email:send", "sms:send"], 60, tokenStore, auditLog); // exceeds_parent_scope
+    const { token: shortLivedParent, secret: shortLivedParentSecret } = await issueToken({ subject: "agent-2", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
+    await delegateToken(shortLivedParent.id, shortLivedParentSecret, "sub-agent", ["email:send", "sms:send"], 60, tokenStore, auditLog); // exceeds_parent_scope
 
     const pendingRequest = requestToken({ subject: "agent-3", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
     denyRequest(pendingRequest.id, requestStore, auditLog, "approver-1", "unverified_subject");
 
-    const noScopeToken = issueToken({ subject: "agent-4", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
-    accessCustomerData(noScopeToken.id, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id); // out_of_scope again, different subsystem
+    const { token: noScopeToken, secret: noScopeSecret } = await issueToken({ subject: "agent-4", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
+    await accessCustomerData(noScopeToken.id, noScopeSecret, "cust-001", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id); // out_of_scope again, different subsystem
 
-    const customerReadToken = issueToken({ subject: "agent-5", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
-    accessCustomerData(customerReadToken.id, "not-a-real-customer", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id); // unknown_customer — reaches this branch only because customer:read is actually present
+    const { token: customerReadToken, secret: customerReadSecret } = await issueToken({ subject: "agent-5", scope: ["customer:read"], ttlSeconds: 300 }, tokenStore);
+    await accessCustomerData(customerReadToken.id, customerReadSecret, "not-a-real-customer", tokenStore, auditLog, customerRegistry, redactionRuleStore, rule.id); // unknown_customer — reaches this branch only because customer:read is actually present
 
     const denialEntries = auditLog.entries().filter((e) => e.decision === "denied" || e.decision === "request_denied");
 

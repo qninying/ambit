@@ -19,6 +19,13 @@ export interface PendingRequest extends TokenRequest {
   // (the SDK, in particular) needs to go from "my request" to "my token"
   // without a separate lookup path existing for that purpose.
   tokenId?: string;
+  // ADR-013: the token's plaintext secret, held here transiently between
+  // issuance and the one time the rightful requester claims it via
+  // claimTokenSecret() below — cleared the instant it's claimed. NEVER
+  // send this field over GET /requests/:id (server.ts strips it
+  // explicitly) — that route is unauthenticated, and this field existing
+  // at all is only safe because nothing public ever reads it back out.
+  tokenSecret?: string;
   // Optional, caller-supplied. Lets requestToken() be safely retried (e.g.
   // by the SDK's timeout-and-retry wrapper) without risking a duplicate
   // pending request — see the idempotency check in requestToken() below.
@@ -40,6 +47,32 @@ export class RequestNotPendingError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "RequestNotPendingError";
+  }
+}
+
+// ADR-013: claimTokenSecret()'s three distinct failure shapes — kept
+// separate rather than reusing UnknownRequestError/RequestNotPendingError,
+// since each maps to a different, deliberate HTTP status at the server.ts
+// boundary (403 / 409 / 410) and a caller needs to tell them apart, not
+// just learn "it didn't work."
+export class WrongSubjectError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WrongSubjectError";
+  }
+}
+
+export class RequestNotApprovedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RequestNotApprovedError";
+  }
+}
+
+export class TokenSecretAlreadyClaimedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TokenSecretAlreadyClaimedError";
   }
 }
 
@@ -108,7 +141,12 @@ export function requestToken(
 // policy (if any) was actually attached before they clicked Approve.
 // policyStore is optional for the same reason issueToken's is: approving
 // with no policyId works exactly as it always did.
-export function approveRequest(
+// ADR-013: returns only the Token, never the secret — the approver isn't
+// the token's rightful holder, just the human who authorized it existing.
+// The secret is stored transiently on the request record instead (below)
+// and only ever leaves the server via claimTokenSecret(), to the original
+// requesting subject, exactly once.
+export async function approveRequest(
   requestId: string,
   requestStore: RequestStore,
   tokenStore: TokenStore,
@@ -117,16 +155,17 @@ export function approveRequest(
   policyId?: string,
   policyStore?: PolicyStore,
   now: Date = new Date(),
-): Token {
+): Promise<Token> {
   const pending = getPending(requestId, requestStore, "approve");
 
   let token: Token;
+  let secret: string;
   try {
-    token = issueToken(
+    ({ token, secret } = await issueToken(
       { subject: pending.subject, scope: pending.scope, ttlSeconds: pending.ttlSeconds, policyId },
       tokenStore,
       policyStore,
-    );
+    ));
   } catch (err) {
     // An approval attempt that a policy blocks — or that a store outage
     // (REQ-008) interrupts — is still a real event — an administrator
@@ -146,7 +185,7 @@ export function approveRequest(
     }
     throw err;
   }
-  requestStore.save({ ...pending, status: "approved", tokenId: token.id });
+  requestStore.save({ ...pending, status: "approved", tokenId: token.id, tokenSecret: secret });
   auditLog.record({
     requestId,
     tokenId: token.id,
@@ -192,6 +231,59 @@ export function denyRequest(
     actor: approver,
     reasonCode,
   }, now);
+}
+
+// ADR-013: the one legitimate path a real caller uses to actually receive
+// a token's secret — everything else in this file only ever produces
+// hashes and ids. requestingSubject comes from the caller's own verified
+// agent credential (server.ts's requireAgentCredential), never from
+// anything the caller could just type — matching it against pending.subject
+// is what makes this "prove you're the one who asked," not "prove you can
+// guess a request id," which is the whole point given GET /requests/:id is
+// public and its id alone was never meant to be a bearer credential either.
+export function claimTokenSecret(
+  requestId: string,
+  requestingSubject: string,
+  requestStore: RequestStore,
+  auditLog: AuditLog,
+  now: Date = new Date(),
+): { tokenId: string; secret: string } {
+  const pending = requestStore.get(requestId);
+  if (!pending) {
+    throw new UnknownRequestError(`cannot claim a token secret for request "${requestId}" — no such request exists`);
+  }
+  if (pending.subject !== requestingSubject) {
+    auditLog.record({
+      requestId,
+      subject: requestingSubject,
+      action: "claim_token_secret",
+      decision: "denied",
+      reasonCode: "wrong_subject",
+      message: `Credential authenticated as "${requestingSubject}", but request "${requestId}" was submitted by "${pending.subject}" — only the original requester can claim its token's secret.`,
+    }, now);
+    throw new WrongSubjectError(`request "${requestId}" was not submitted by "${requestingSubject}"`);
+  }
+  if (pending.status !== "approved" || !pending.tokenId) {
+    throw new RequestNotApprovedError(`request "${requestId}" is "${pending.status}" — no token has been issued for it yet`);
+  }
+  if (!pending.tokenSecret) {
+    throw new TokenSecretAlreadyClaimedError(`the secret for request "${requestId}"'s token was already claimed once — it cannot be retrieved again`);
+  }
+
+  const secret = pending.tokenSecret;
+  const tokenId = pending.tokenId;
+  // Cleared, not just marked claimed — the plaintext must not still be
+  // sitting in the store after this point, same "the secret exists for one
+  // response only" guarantee issueToken's own return value makes.
+  requestStore.save({ ...pending, tokenSecret: undefined });
+  auditLog.record({
+    requestId,
+    tokenId,
+    subject: requestingSubject,
+    action: "claim_token_secret",
+    decision: "token_secret_claimed",
+  }, now);
+  return { tokenId, secret };
 }
 
 function getPending(requestId: string, requestStore: RequestStore, verb: "approve" | "deny"): PendingRequest {

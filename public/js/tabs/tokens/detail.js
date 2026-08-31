@@ -1,4 +1,4 @@
-import { STATE, postJson } from "../../state.js";
+import { STATE, postJson, setFormOpen } from "../../state.js";
 import { esc, fmtTime, tokenStatusBadge, scopeTags } from "../../format.js";
 import { confirmAction } from "../../confirm.js";
 import { renderDelegatePanel } from "./delegate.js";
@@ -48,6 +48,11 @@ export function renderTokenDetail(main, id, tick) {
     <div class="panel">
       <div class="panel-header"><h3>Actions</h3></div>
       <div class="panel-body padded">
+        <div class="field mb-3">
+          <label>This token's secret</label>
+          <input id="held-secret" placeholder="paste the secret you claimed for this token (see ADR-013)" />
+          <div class="hint">Delegating and accessing customer data both require proof you actually hold this token — its id alone (shown above) isn't enough. Claim a secret from the Requests tab after approval, or paste one a delegation below just handed you.</div>
+        </div>
         <div id="delegate-panel-slot"></div>
         <hr class="section-divider" />
         <div id="customer-data-panel-slot"></div>
@@ -55,8 +60,27 @@ export function renderTokenDetail(main, id, tick) {
     </div>
   `;
 
-  renderDelegatePanel(document.getElementById("delegate-panel-slot"), token, tick);
-  renderCustomerDataPanel(document.getElementById("customer-data-panel-slot"), token, tick);
+  // Shared by both subpanels below rather than duplicating the input — a
+  // live getter, not a snapshotted value, so it always reads whatever the
+  // operator has pasted in at click time (including a child's secret they
+  // pasted in after a delegation just below handed it to them).
+  const getHeldSecret = () => document.getElementById("held-secret").value.trim();
+  renderDelegatePanel(document.getElementById("delegate-panel-slot"), token, tick, getHeldSecret);
+  renderCustomerDataPanel(document.getElementById("customer-data-panel-slot"), token, getHeldSecret);
+
+  // A pasted secret loses focus the moment the operator clicks "Delegate" or
+  // "Access customer data" to open the next step — formFieldIsFocused()'s
+  // usual protection would already be gone by then. isFormOpen() (already
+  // holding the whole tab's poll-render off while a subform is open) is
+  // reused here for the same purpose: once something real is pasted, treat
+  // it exactly like an in-progress form until the operator navigates away
+  // (app.js's hashchange handler already resets isFormOpen() there). Only
+  // ever turns protection ON here, never off — a subform below may
+  // legitimately still be open and relying on the same flag; this field
+  // being cleared is not a signal that it's safe to stop protecting that.
+  document.getElementById("held-secret").addEventListener("input", (e) => {
+    if (e.target.value.trim().length > 0) setFormOpen(true);
+  });
 
   if (canRevoke) {
     document.getElementById("revoke-btn").addEventListener("click", async () => {

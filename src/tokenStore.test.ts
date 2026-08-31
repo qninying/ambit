@@ -8,10 +8,10 @@ describe("TokenStore.list", () => {
     expect(store.list()).toEqual([]);
   });
 
-  it("returns every token issued, in this store", () => {
+  it("returns every token issued, in this store", async () => {
     const store = new TokenStore();
-    const a = issueToken({ subject: "agent-1", scope: ["email:send"], ttlSeconds: 300 }, store);
-    const b = issueToken({ subject: "agent-2", scope: ["crm:read"], ttlSeconds: 300 }, store);
+    const { token: a } = await issueToken({ subject: "agent-1", scope: ["email:send"], ttlSeconds: 300 }, store);
+    const { token: b } = await issueToken({ subject: "agent-2", scope: ["crm:read"], ttlSeconds: 300 }, store);
 
     const list = store.list();
     expect(list).toHaveLength(2);

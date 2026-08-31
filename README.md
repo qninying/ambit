@@ -41,7 +41,7 @@ ADMIN_USERNAME=admin ADMIN_PASSWORD_HASH='<the printed hash>' SESSION_SIGNING_SE
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **199 tests passing.**
+in a unit test. Current count: **229 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -116,6 +116,21 @@ in a unit test. Current count: **199 tests passing.**
   item 1 for `POST /requests` only — every other mutating route is still
   unauthenticated, and there's no revoke/rotate path yet for a leaked agent
   credential.
+- Using an issued token — to enforce it, delegate from it, reach a mock
+  endpoint, or read customer data through it — requires proving you hold
+  its real secret, not just knowing its (public, widely-visible) id.
+  Checked inside `enforceToken()` itself, before any other detail about the
+  token is disclosed, so a wrong credential also stops leaking a token's
+  real status for free. A human-approved token's secret is claimed exactly
+  once by the original requesting agent (`POST /requests/:id/token-secret`,
+  gated by the same agent credential it submitted with); a delegated
+  token's secret is handed back synchronously to whoever just proved they
+  held the parent (see
+  [ADR-013](adr/ADR-013-token-possession-proof.md)). **This closes ADR-009
+  item 3** for the four routes that actually exercise a token's authority
+  — `POST /tokens/:id/revoke` remains deliberately unauthenticated, since
+  revocation is a management action, not a use of the token's own
+  authority.
 
 **Console**
 - Every backend capability above has a real UI surface, not just an API —

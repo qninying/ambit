@@ -62,6 +62,14 @@ export interface RemoteRequest {
   idempotencyKey?: string;
 }
 
+// ADR-013: what claimTokenSecret() returns — the one thing a caller
+// actually needs to use the token it requested. RemoteRequest.tokenId
+// tells you a token exists; this is proof of possession of it.
+export interface ClaimedTokenSecret {
+  tokenId: string;
+  secret: string;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -98,6 +106,19 @@ export class AmbitClient {
   // credential needed here.
   async getRequest(id: string): Promise<RemoteRequest> {
     return this.#send("GET", `/requests/${encodeURIComponent(id)}`, undefined, this.#maxAttempts, false);
+  }
+
+  // ADR-013: the one legitimate way to actually get a usable token — once
+  // getRequest() shows status "approved", this is the next call. Deliberately
+  // never retried (maxAttempts fixed at 1, unlike every other method here):
+  // the secret can only be claimed once, so a retry after a response is lost
+  // in transit can't safely be told apart from a genuine second attempt —
+  // it would surface as a 410 either way, and blindly retrying could make a
+  // caller believe the claim failed when it actually succeeded server-side.
+  // If this call's outcome is ever genuinely unknown, that's a real gap a
+  // retry can't paper over, not something to guess past.
+  async claimTokenSecret(requestId: string): Promise<ClaimedTokenSecret> {
+    return this.#send("POST", `/requests/${encodeURIComponent(requestId)}/token-secret`, undefined, 1, true);
   }
 
   async #send(method: string, path: string, body: unknown, maxAttempts: number, requiresAgentCredential: boolean): Promise<any> {

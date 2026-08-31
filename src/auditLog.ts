@@ -38,7 +38,8 @@ export interface AuditLogEntry {
     | "circuit_closed"
     | "redaction_rule_created"
     | "data_accessed"
-    | "agent_identity_registered";
+    | "agent_identity_registered"
+    | "token_secret_claimed";
   reasonCode?: string;
   // REQ-018: the detailed, human-readable explanation behind a denial —
   // present only on denials, matching "no error message is returned" for

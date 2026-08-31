@@ -9,9 +9,20 @@ import express from "express";
 import { AnomalyDetector } from "./anomalyDetector.js";
 import { AuditLog } from "./auditLog.js";
 import { CircuitOpenError, CircuitBreaker } from "./circuitBreaker.js";
-import { InvalidScopeError, PolicyViolationError, UnknownTokenError, enforceToken, revokeToken, type RevocationReason } from "./token.js";
+import { InvalidScopeError, PolicyViolationError, UnknownTokenError, enforceToken, revokeToken, type RevocationReason, type Token } from "./token.js";
 import { delegateToken } from "./delegation.js";
-import { RequestNotPendingError, UnknownRequestError, approveRequest, denyRequest, requestToken, type DenialReason } from "./tokenRequest.js";
+import {
+  RequestNotApprovedError,
+  RequestNotPendingError,
+  TokenSecretAlreadyClaimedError,
+  UnknownRequestError,
+  WrongSubjectError,
+  approveRequest,
+  claimTokenSecret,
+  denyRequest,
+  requestToken,
+  type DenialReason,
+} from "./tokenRequest.js";
 import { RequestStore } from "./requestStore.js";
 import { TokenStore } from "./tokenStore.js";
 import { MockEndpointRegistry, type MockSystem } from "./mockEndpoints.js";
@@ -167,6 +178,16 @@ app.post("/auth/login", async (req, res) => {
   res.status(200).json({ token });
 });
 
+// Shared by every route that reads an `Authorization: Bearer <...>` header
+// — requireSession, requireAgentCredential, and the token-secret routes
+// below all did this same two-line extraction independently before this
+// was lifted out (three call sites is this codebase's own stated threshold
+// for "not a coincidence," per CLAUDE.md's Composition Rules).
+function bearerToken(req: express.Request): string {
+  const header = req.header("authorization") ?? "";
+  return header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+}
+
 // Applied to every route where the caller's real, verified identity
 // matters — starting with approve/deny (ADR-009 item 2: a verified
 // approver identity, not a free-text field). Never throws; a missing or
@@ -177,8 +198,7 @@ function requireSession(req: express.Request, res: express.Response, next: expre
     res.status(503).json({ error: "authentication is not configured" });
     return;
   }
-  const header = req.header("authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+  const token = bearerToken(req);
   if (!token) {
     res.status(401).json({ error: "missing Authorization: Bearer <token> header" });
     return;
@@ -229,8 +249,7 @@ app.get("/agent-identities", requireSession, (_req, res) => {
 // credential, never something the caller types into the request body.
 // Never throws; a missing/invalid/unrecognized credential is a clean 401.
 async function requireAgentCredential(req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> {
-  const header = req.header("authorization") ?? "";
-  const credential = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+  const credential = bearerToken(req);
   if (!credential) {
     res.status(401).json({ error: "missing Authorization: Bearer <agentId>.<secret> header" });
     return;
@@ -291,18 +310,45 @@ app.get("/requests/:id", (req, res) => {
     res.status(404).json({ error: `no such request "${req.params.id}"` });
     return;
   }
-  res.json(pending);
+  // ADR-013: this route is unauthenticated — tokenSecret must never appear
+  // here even transiently, or the whole point of claiming it through a
+  // dedicated, authenticated, one-time route is defeated.
+  const { tokenSecret: _tokenSecret, ...safe } = pending;
+  res.json(safe);
+});
+
+// ADR-013: the one legitimate path a real caller uses to actually receive
+// a token's secret. Requires the same agent credential used to submit the
+// original request — claimTokenSecret() checks the derived subject
+// matches, not anything this call could just claim in its body.
+app.post<{ id: string }>("/requests/:id/token-secret", requireAgentCredential, (req, res) => {
+  try {
+    const claimed = claimTokenSecret(req.params.id, req.agentIdentity!.subject, requestStore, auditLog);
+    res.status(200).json(claimed);
+  } catch (err) {
+    if (err instanceof UnknownRequestError) {
+      res.status(404).json({ error: err.message });
+    } else if (err instanceof WrongSubjectError) {
+      res.status(403).json({ error: err.message });
+    } else if (err instanceof RequestNotApprovedError) {
+      res.status(409).json({ error: err.message });
+    } else if (err instanceof TokenSecretAlreadyClaimedError) {
+      res.status(410).json({ error: err.message });
+    } else {
+      throw err;
+    }
+  }
 });
 
 // ADR-009 hardening: approver is now the authenticated session's own
 // username — never something the caller types into the request body.
 // ADR-010: policyId is still the approver's own choice, made at approval
 // time — not inherited from anything the requester submitted.
-app.post<{ id: string }>("/requests/:id/approve", requireSession, (req, res) => {
+app.post<{ id: string }>("/requests/:id/approve", requireSession, async (req, res) => {
   const approver = req.session!.username;
   const policyId = req.body?.policyId;
   try {
-    const token = approveRequest(
+    const token = await approveRequest(
       req.params.id,
       requestStore,
       tokenStore,
@@ -351,18 +397,37 @@ app.post<{ id: string }>("/requests/:id/deny", requireSession, (req, res) => {
   }
 });
 
+// ADR-013: secretHash is an implementation detail of the possession check
+// — it must never leave the server, same discipline GET /agent-identities
+// already holds for agent credentials. Applied everywhere a raw Token
+// object gets serialized: approve's response, revoke's, GET /tokens, and
+// delegate's decision.token below.
+function withoutSecretHash(token: Token): Omit<Token, "secretHash"> {
+  const { secretHash: _secretHash, ...rest } = token;
+  return rest;
+}
+
 // The Enforcement Gateway (REQ-004), reachable for real — this is what
 // STORY-001/002 were missing a demo path for.
-app.post("/tokens/:id/enforce", (req, res) => {
+// ADR-013: possession-checked — the caller must present the secret handed
+// out at issuance (or claimed via POST /requests/:id/token-secret), not
+// just know the token's public id.
+app.post("/tokens/:id/enforce", async (req, res) => {
   const action = req.body?.action;
   if (typeof action !== "string") {
     res.status(400).json({ error: "action (string) is required" });
     return;
   }
-  const decision = enforceToken(req.params.id, action, tokenStore, auditLog);
+  const decision = await enforceToken(req.params.id, bearerToken(req), action, tokenStore, auditLog);
   res.status(200).json(decision);
 });
 
+// Deliberately NOT possession-checked — revocation is a management action
+// (an operator revoking a leaked or no-longer-needed credential, possibly
+// one they no longer hold the secret for), not a use of the token's own
+// authority. This route remains fully open, exactly as scoped in ADR-009
+// — closing it is a different, still-open item (verified caller identity
+// on every route), not this ADR's job.
 app.post("/tokens/:id/revoke", (req, res) => {
   const reasonCode = req.body?.reasonCode as RevocationReason | undefined;
   const valid: RevocationReason[] = ["compromised", "no_longer_needed", "policy_violation", "superseded"];
@@ -372,7 +437,7 @@ app.post("/tokens/:id/revoke", (req, res) => {
   }
   try {
     const token = revokeToken(req.params.id, tokenStore, auditLog, reasonCode);
-    res.status(200).json(token);
+    res.status(200).json(withoutSecretHash(token));
   } catch (err) {
     if (err instanceof UnknownTokenError) {
       res.status(404).json({ error: err.message });
@@ -385,14 +450,19 @@ app.post("/tokens/:id/revoke", (req, res) => {
 // REQ-003/REQ-012: a subagent's token, narrowed from a parent's. Returns 200
 // with approved:false on denial rather than an error status — a refused
 // delegation is a normal outcome, not a fault, same treatment as /enforce.
-app.post("/tokens/:id/delegate", (req, res) => {
+// ADR-013: possession-checked against the PARENT token — delegating spends
+// some of the parent's authority, so minting a child from it requires the
+// same proof using it directly would. On success, the child's own secret
+// is returned here, once, synchronously — whoever proved they hold the
+// parent is the rightful holder of what's minted from it.
+app.post("/tokens/:id/delegate", async (req, res) => {
   const { subject, scope, ttlSeconds } = req.body ?? {};
   if (typeof subject !== "string" || !Array.isArray(scope) || typeof ttlSeconds !== "number") {
     res.status(400).json({ error: "subject (string), scope (string[]), and ttlSeconds (number) are required" });
     return;
   }
-  const decision = delegateToken(req.params.id, subject, scope, ttlSeconds, tokenStore, auditLog);
-  res.status(200).json(decision);
+  const decision = await delegateToken(req.params.id, bearerToken(req), subject, scope, ttlSeconds, tokenStore, auditLog);
+  res.status(200).json(decision.approved ? { ...decision, token: withoutSecretHash(decision.token) } : decision);
 });
 
 // REQ-006/REQ-007: reach a mock endpoint only through the Enforcement
@@ -405,7 +475,7 @@ app.post("/tokens/:id/access", async (req, res) => {
     res.status(400).json({ error: `system must be one of: ${MOCK_SYSTEMS.join(", ")}; verb (string) is required` });
     return;
   }
-  const result = await accessMockEndpoint(req.params.id, system, verb, tokenStore, auditLog, mockEndpoints, accessConfig);
+  const result = await accessMockEndpoint(req.params.id, bearerToken(req), system, verb, tokenStore, auditLog, mockEndpoints, accessConfig);
   res.status(200).json(result);
 });
 
@@ -480,8 +550,10 @@ app.post("/circuit-breaker/simulate-outage", requireAdminToggleKey, (req, res) =
 
 // GET /tokens — the console's Tokens tab. Every token this process has
 // issued, active or revoked; no filtering, the UI decides how to slice it.
+// ADR-013: secretHash never leaves the server, even here — listing a
+// token's metadata is not the same as being able to use it.
 app.get("/tokens", (_req, res) => {
-  res.json(tokenStore.list());
+  res.json(tokenStore.list().map(withoutSecretHash));
 });
 
 // REQ-011/REQ-017: human-authored policies. PATCH, not PUT — a policy
@@ -576,9 +648,10 @@ app.get("/redaction-rules", (_req, res) => {
 // accessCustomerData() itself still takes a rule id as a real parameter
 // (used directly by callers who aren't the HTTP boundary, e.g. tests) —
 // this route is the trust boundary that pins it, not the function.
-app.post("/tokens/:id/customer-data/:customerId", (req, res) => {
-  const result = accessCustomerData(
+app.post("/tokens/:id/customer-data/:customerId", async (req, res) => {
+  const result = await accessCustomerData(
     req.params.id,
+    bearerToken(req),
     req.params.customerId,
     tokenStore,
     auditLog,

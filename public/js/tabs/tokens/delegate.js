@@ -12,17 +12,18 @@ const DENIAL_COPY = {
   exceeds_parent_scope: "The requested scope isn't a subset of the parent's — delegation can only narrow, never broaden.",
   not_narrower: "The requested scope equals the parent's — a delegated token must be strictly narrower.",
   store_unavailable: "The Token Store is currently failing closed (circuit breaker open).",
+  invalid_credential: "The pasted secret doesn't match this token — double-check you copied the right one.",
 };
 
-export function renderDelegatePanel(slot, token, tick) {
+export function renderDelegatePanel(slot, token, tick, getHeldSecret) {
   slot.innerHTML = `
     <button class="btn btn-secondary btn-sm" id="delegate-open-btn">Delegate a narrower token</button>
     <div id="delegate-form-slot"></div>
   `;
-  document.getElementById("delegate-open-btn").addEventListener("click", () => showForm(slot, token, tick));
+  document.getElementById("delegate-open-btn").addEventListener("click", () => showForm(slot, token, tick, getHeldSecret));
 }
 
-function showForm(slot, token, tick) {
+function showForm(slot, token, tick, getHeldSecret) {
   setFormOpen(true);
   const formSlot = document.getElementById("delegate-form-slot");
   formSlot.innerHTML = `
@@ -42,24 +43,43 @@ function showForm(slot, token, tick) {
     </div>
   `;
   document.getElementById("dg-cancel").addEventListener("click", () => { formSlot.innerHTML = ""; setFormOpen(false); });
-  document.getElementById("dg-submit").addEventListener("click", () => submit(token, formSlot, tick));
+  document.getElementById("dg-submit").addEventListener("click", () => submit(token, formSlot, tick, getHeldSecret));
 }
 
-async function submit(token, formSlot, tick) {
+async function submit(token, formSlot, tick, getHeldSecret) {
   const subject = document.getElementById("dg-subject").value.trim();
   const scope = document.getElementById("dg-scope").value.split(",").map((s) => s.trim()).filter(Boolean);
   const ttlSeconds = Number(document.getElementById("dg-ttl").value);
   const result = document.getElementById("dg-result");
+  const heldSecret = getHeldSecret();
+  if (!heldSecret) {
+    result.innerHTML = `<div class="toast error">Paste this token's own secret above first — delegating requires proving you actually hold it (ADR-013).</div>`;
+    return;
+  }
   let decision;
   try {
-    decision = await postJson(`/tokens/${token.id}/delegate`, { subject, scope, ttlSeconds });
+    // ADR-013: delegating spends some of the parent's authority, so it
+    // requires the same proof of possession using the parent directly
+    // would — the operator's own session is irrelevant here.
+    decision = await postJson(`/tokens/${token.id}/delegate`, { subject, scope, ttlSeconds }, { Authorization: `Bearer ${heldSecret}` });
   } catch (err) {
     result.innerHTML = `<div class="toast error">${esc(err.message)}</div>`;
     return;
   }
   if (decision.approved) {
-    result.innerHTML = `<div class="toast ok">Delegated — <a href="#tokens/${decision.token.id}">${esc(decision.token.subject)}</a> issued with ${scopeTags(decision.token.scope)}.</div>`;
-    setFormOpen(false);
+    // The child's secret is handed back here, once, synchronously — same
+    // one-time-handback treatment as every other credential in this build.
+    // Shown plainly (not stashed anywhere) so the operator can copy it into
+    // the "This token's secret" field above if they navigate to the child
+    // and want to delegate or access data from it in turn.
+    result.innerHTML = `
+      <div class="toast ok">Delegated — <a href="#tokens/${decision.token.id}">${esc(decision.token.subject)}</a> issued with ${scopeTags(decision.token.scope)}.</div>
+      <div class="field mt-2">
+        <label>Child token's secret — shown once, copy it now</label>
+        <input readonly value="${esc(decision.secret)}" onclick="this.select()" />
+      </div>
+    `;
+    setFormOpen(true); // keep protecting the tab — the secret above is still sitting unclaimed
     await tick(true);
   } else {
     result.innerHTML = `<div class="toast error">Denied (${esc(decision.reasonCode)}) — ${esc(DENIAL_COPY[decision.reasonCode] || "")}</div>`;

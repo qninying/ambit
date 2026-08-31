@@ -6,6 +6,7 @@
 
 import type { AuditLog } from "./auditLog.js";
 import { CircuitOpenError } from "./circuitBreaker.js";
+import { verifyPassword } from "./passwordHash.js";
 import { issueToken, type Token } from "./token.js";
 import type { TokenStore } from "./tokenStore.js";
 
@@ -14,24 +15,34 @@ export type DelegationDenialReason =
   | "empty_scope"
   | "exceeds_parent_scope"
   | "not_narrower"
-  | "store_unavailable";
+  | "store_unavailable"
+  | "invalid_credential";
 
 export type DelegationDecision =
-  | { approved: true; token: Token }
+  // ADR-013: the child's secret is handed back here, once, synchronously —
+  // whoever proved possession of the parent (below) is the rightful holder
+  // of the token being minted from it, so there's no separate claim step
+  // the way there is for a request going through human approval.
+  | { approved: true; token: Token; secret: string }
   | { approved: false; reasonCode: DelegationDenialReason };
 
 // Never throws — same "always a decision" contract as enforceToken, so a
 // store outage (REQ-008) is a denial reason like any other, not an
 // exception a caller has to separately handle.
-export function delegateToken(
+//
+// ADR-013: providedParentSecret is checked as soon as the parent record is
+// found, before any scope/expiry detail is examined — same "prove
+// possession before anything else is disclosed" ordering as enforceToken.
+export async function delegateToken(
   parentTokenId: string,
+  providedParentSecret: string,
   childSubject: string,
   requestedScope: string[],
   ttlSeconds: number,
   tokenStore: TokenStore,
   auditLog: AuditLog,
   now: Date = new Date(),
-): DelegationDecision {
+): Promise<DelegationDecision> {
   let parent;
   try {
     parent = tokenStore.get(parentTokenId);
@@ -41,8 +52,17 @@ export function delegateToken(
     }
     throw err;
   }
-  const parentValid = !!parent && parent.status === "active" && now.getTime() < parent.expiresAt.getTime();
-  if (!parent || !parentValid) {
+  if (!parent) {
+    return deny(parentTokenId, childSubject, "parent_invalid", auditLog, now);
+  }
+
+  const possessed = await verifyPassword(providedParentSecret, parent.secretHash);
+  if (!possessed) {
+    return deny(parentTokenId, childSubject, "invalid_credential", auditLog, now);
+  }
+
+  const parentValid = parent.status === "active" && now.getTime() < parent.expiresAt.getTime();
+  if (!parentValid) {
     return deny(parentTokenId, childSubject, "parent_invalid", auditLog, now);
   }
 
@@ -63,8 +83,9 @@ export function delegateToken(
   }
 
   let token: Token;
+  let secret: string;
   try {
-    token = issueToken({ subject: childSubject, scope: requestedScope, ttlSeconds, parentTokenId }, tokenStore);
+    ({ token, secret } = await issueToken({ subject: childSubject, scope: requestedScope, ttlSeconds, parentTokenId }, tokenStore));
   } catch (err) {
     if (err instanceof CircuitOpenError) {
       return deny(parentTokenId, childSubject, "store_unavailable", auditLog, now);
@@ -77,7 +98,7 @@ export function delegateToken(
     action: "delegate",
     decision: "allowed",
   }, now);
-  return { approved: true, token };
+  return { approved: true, token, secret };
 }
 
 function deny(

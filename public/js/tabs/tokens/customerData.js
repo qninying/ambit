@@ -9,15 +9,15 @@ import { esc } from "../../format.js";
 
 const DEMO_CUSTOMERS = ["cust-001", "cust-002"];
 
-export function renderCustomerDataPanel(slot, token, tick) {
+export function renderCustomerDataPanel(slot, token, getHeldSecret) {
   slot.innerHTML = `
     <button class="btn btn-secondary btn-sm" id="cd-open-btn">Access customer data</button>
     <div id="cd-form-slot"></div>
   `;
-  document.getElementById("cd-open-btn").addEventListener("click", () => showForm(slot, token));
+  document.getElementById("cd-open-btn").addEventListener("click", () => showForm(slot, token, getHeldSecret));
 }
 
-function showForm(slot, token) {
+function showForm(slot, token, getHeldSecret) {
   setFormOpen(true);
   const formSlot = document.getElementById("cd-form-slot");
   formSlot.innerHTML = `
@@ -36,15 +36,23 @@ function showForm(slot, token) {
     </div>
   `;
   document.getElementById("cd-cancel").addEventListener("click", () => { formSlot.innerHTML = ""; setFormOpen(false); });
-  document.getElementById("cd-submit").addEventListener("click", () => submit(token, formSlot));
+  document.getElementById("cd-submit").addEventListener("click", () => submit(token, formSlot, getHeldSecret));
 }
 
-async function submit(token, formSlot) {
+async function submit(token, formSlot, getHeldSecret) {
   const customerId = document.getElementById("cd-customer").value;
   const result = document.getElementById("cd-result");
+  const heldSecret = getHeldSecret();
+  if (!heldSecret) {
+    result.innerHTML = `<div class="toast error">Paste this token's own secret above first — accessing data through it requires proving you actually hold it (ADR-013).</div>`;
+    return;
+  }
   let res;
   try {
-    res = await postJson(`/tokens/${token.id}/customer-data/${customerId}`, {});
+    // ADR-013: this is where redaction-protected PII actually gets
+    // exposed — proof of possession here matters more than anywhere else
+    // in this build, not less.
+    res = await postJson(`/tokens/${token.id}/customer-data/${customerId}`, {}, { Authorization: `Bearer ${heldSecret}` });
   } catch (err) {
     result.innerHTML = `<div class="toast error">${esc(err.message)}</div>`;
     return;

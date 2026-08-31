@@ -40,16 +40,18 @@ describe("REQ-008: fail-closed circuit breaker, wired into the real call paths",
   // Acceptance: "Given the Store is reachable, when a request is made, then
   // it is processed." — a breaker being present must not change normal
   // behavior at all.
-  it("does not change normal behavior when the store is reachable", () => {
+  it("does not change normal behavior when the store is reachable", async () => {
     const { tokenStore, auditLog } = setup();
-    const token = issueToken({ subject: "agent-1", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
-    const decision = enforceToken(token.id, "email:send", tokenStore, auditLog);
+    const { token, secret } = await issueToken({ subject: "agent-1", scope: ["email:send"], ttlSeconds: 300 }, tokenStore);
+    const decision = await enforceToken(token.id, secret, "email:send", tokenStore, auditLog);
     expect(decision).toEqual({ allowed: true });
   });
 
   // Acceptance: "Given the Policy & Token Store is unreachable, when a
-  // request is made, then it is denied." — enforceToken's half.
-  it("enforceToken denies with store_unavailable, never throws, once the breaker is open", () => {
+  // request is made, then it is denied." — enforceToken's half. The store
+  // outage short-circuits before the secret is ever checked, so the
+  // placeholder secret here is irrelevant to what's being proven.
+  it("enforceToken denies with store_unavailable, never throws, once the breaker is open", async () => {
     const { tokenStore, breaker, auditLog } = setup();
     breaker.simulateOutage(true);
     // Trip it for real via two failing calls, matching the configured threshold.
@@ -57,7 +59,7 @@ describe("REQ-008: fail-closed circuit breaker, wired into the real call paths",
     expect(() => tokenStore.get("anything")).toThrow();
     expect(breaker.state()).toBe("open");
 
-    const decision = enforceToken("some-token-id", "email:send", tokenStore, auditLog);
+    const decision = await enforceToken("some-token-id", "irrelevant-secret", "email:send", tokenStore, auditLog);
     expect(decision).toEqual({
       allowed: false,
       reasonCode: "store_unavailable",
@@ -69,16 +71,16 @@ describe("REQ-008: fail-closed circuit breaker, wired into the real call paths",
   });
 
   // delegateToken's half of the same guarantee.
-  it("delegateToken denies with store_unavailable, never throws, once the breaker is open", () => {
+  it("delegateToken denies with store_unavailable, never throws, once the breaker is open", async () => {
     const { tokenStore, breaker, auditLog } = setup();
-    const parent = issueToken({ subject: "agent-1", scope: ["email:send", "sms:send"], ttlSeconds: 300 }, tokenStore);
+    const { token: parent, secret: parentSecret } = await issueToken({ subject: "agent-1", scope: ["email:send", "sms:send"], ttlSeconds: 300 }, tokenStore);
 
     breaker.simulateOutage(true);
     expect(() => tokenStore.get("x")).toThrow();
     expect(() => tokenStore.get("x")).toThrow();
     expect(breaker.state()).toBe("open");
 
-    const decision = delegateToken(parent.id, "sub-agent-1", ["email:send"], 60, tokenStore, auditLog);
+    const decision = await delegateToken(parent.id, parentSecret, "sub-agent-1", ["email:send"], 60, tokenStore, auditLog);
     expect(decision).toEqual({ approved: false, reasonCode: "store_unavailable" });
   });
 
@@ -86,7 +88,7 @@ describe("REQ-008: fail-closed circuit breaker, wired into the real call paths",
   // token actually gets issued through in this system, and proves the
   // request stays pending (not consumed) so a retry once the store
   // recovers is still possible, same as the existing policy-violation path.
-  it("approveRequest denies and logs, leaving the request pending, when the store is unreachable at issuance time", () => {
+  it("approveRequest denies and logs, leaving the request pending, when the store is unreachable at issuance time", async () => {
     const { tokenStore, requestStore, anomalyDetector, auditLog, breaker } = setup();
     const pending = requestToken({ subject: "agent-1", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
@@ -95,7 +97,7 @@ describe("REQ-008: fail-closed circuit breaker, wired into the real call paths",
     expect(() => tokenStore.get("x")).toThrow();
     expect(breaker.state()).toBe("open");
 
-    expect(() => approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1")).toThrow();
+    await expect(approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1")).rejects.toThrow();
     expect(requestStore.get(pending.id)?.status).toBe("pending");
     expect(auditLog.entries()).toContainEqual(
       expect.objectContaining({ requestId: pending.id, decision: "request_denied", actor: "approver-1" }),

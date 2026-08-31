@@ -13,6 +13,7 @@ import { AmbitClient, AmbitClientError } from "./ambitClient.js";
 let server: Server;
 let client: AmbitClient;
 let baseUrl: string;
+let adminSessionToken: string;
 const SDK_TEST_SUBJECT = "sdk-test-agent";
 
 beforeAll(async () => {
@@ -36,6 +37,7 @@ beforeAll(async () => {
     body: JSON.stringify({ username: "sdk-test-admin", password: "sdk-test-password" }),
   });
   const { token: sessionToken } = await loginRes.json();
+  adminSessionToken = sessionToken;
   const registerRes = await fetch(`${baseUrl}/agent-identities`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
@@ -196,6 +198,57 @@ describe("AmbitClient.getRequest", () => {
     await expect(client.getRequest("not-a-real-id")).rejects.toMatchObject({
       name: "AmbitClientError",
       status: 404,
+    });
+  });
+});
+
+// ADR-013: the real end-to-end flow — request, approve (as the operator,
+// outside the SDK's own concern), claim, then a secret that genuinely
+// authenticates against the real token it belongs to.
+describe("AmbitClient.claimTokenSecret", () => {
+  async function approve(requestId: string): Promise<void> {
+    await fetch(`${baseUrl}/requests/${requestId}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${adminSessionToken}` },
+      body: JSON.stringify({}),
+    });
+  }
+
+  it("claims a secret that genuinely enforces against the real token, exactly once", async () => {
+    const submitted = await client.requestToken({ scope: ["email:send"], ttlSeconds: 300 });
+    await approve(submitted.id);
+
+    const claimed = await client.claimTokenSecret(submitted.id);
+    expect(claimed.tokenId).toBeTruthy();
+
+    const enforceRes = await fetch(`${baseUrl}/tokens/${claimed.tokenId}/enforce`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${claimed.secret}` },
+      body: JSON.stringify({ action: "email:send" }),
+    });
+    expect(await enforceRes.json()).toEqual({ allowed: true });
+
+    // The one-time guarantee, from the SDK's own vantage point.
+    await expect(client.claimTokenSecret(submitted.id)).rejects.toMatchObject({
+      name: "AmbitClientError",
+      status: 410,
+    });
+  });
+
+  it("throws a 409 AmbitClientError when the request has not been approved yet", async () => {
+    const submitted = await client.requestToken({ scope: ["email:send"], ttlSeconds: 300 });
+
+    await expect(client.claimTokenSecret(submitted.id)).rejects.toMatchObject({
+      name: "AmbitClientError",
+      status: 409,
+    });
+  });
+
+  it("refuses to call claimTokenSecret at all when no agentCredential is configured", async () => {
+    const noCredClient = new AmbitClient({ baseUrl });
+    await expect(noCredClient.claimTokenSecret("irrelevant-id")).rejects.toMatchObject({
+      name: "AmbitClientError",
+      status: 0,
     });
   });
 });

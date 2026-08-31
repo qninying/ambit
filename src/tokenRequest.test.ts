@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { AnomalyDetector } from "./anomalyDetector.js";
 import { AuditLog } from "./auditLog.js";
-import { PolicyViolationError } from "./token.js";
+import { PolicyViolationError, enforceToken } from "./token.js";
 import { PolicyStore, createPolicy } from "./policy.js";
 import { RequestStore } from "./requestStore.js";
 import { TokenStore } from "./tokenStore.js";
 import {
+  RequestNotApprovedError,
   RequestNotPendingError,
+  TokenSecretAlreadyClaimedError,
   UnknownRequestError,
+  WrongSubjectError,
   approveRequest,
+  claimTokenSecret,
   denyRequest,
   requestToken,
 } from "./tokenRequest.js";
@@ -140,11 +144,11 @@ describe("requestToken", () => {
 describe("approveRequest", () => {
   // Acceptance: "Given a token request, when it is displayed, then the
   // approver can approve or deny it" — the approve half.
-  it("issues a real token once an approver approves", () => {
+  it("issues a real token once an approver approves", async () => {
     const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
     const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
-    const token = approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
+    const token = await approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
     expect(token.subject).toBe("agent-42");
     expect(token.status).toBe("active");
@@ -152,24 +156,35 @@ describe("approveRequest", () => {
     expect(requestStore.get(pending.id)?.status).toBe("approved");
   });
 
-  // The link the SDK needs to go from "my request" to "my token" — without
-  // this, GET /requests/:id after approval tells a caller *that* it was
-  // approved but not *what it got*.
-  it("records the issued token's id back onto the request once approved", () => {
+  // ADR-013: the operator who approves is not the token's rightful holder —
+  // only the token, never its secret, comes back from this call.
+  it("does not return the token's secret to the approver", async () => {
     const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
     const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
-    const token = approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
+    const token = await approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
+
+    expect("secret" in token).toBe(false);
+  });
+
+  // The link the SDK needs to go from "my request" to "my token" — without
+  // this, GET /requests/:id after approval tells a caller *that* it was
+  // approved but not *what it got*.
+  it("records the issued token's id back onto the request once approved", async () => {
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+
+    const token = await approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
     expect(requestStore.get(pending.id)?.tokenId).toBe(token.id);
   });
 
   // Acceptance: "Trust: Approval actions are logged."
-  it("logs the approval with the approver as actor", () => {
+  it("logs the approval with the approver as actor", async () => {
     const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
     const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
-    const token = approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
+    const token = await approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
     expect(auditLog.entries()).toContainEqual(
       expect.objectContaining({
@@ -185,13 +200,13 @@ describe("approveRequest", () => {
   // audit trail itself — a compliance officer shouldn't have to
   // cross-reference the token's own policyId (which issueToken doesn't
   // even persist onto the Token record) to find out.
-  it("records which policy the approver chose in the approval's own audit entry", () => {
+  it("records which policy the approver chose in the approval's own audit entry", async () => {
     const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
     const policyStore = new PolicyStore();
     const policy = createPolicy({ name: "Email only", allowedScope: ["email:send"], maxTtlSeconds: 3600 }, "policy-manager-1", policyStore, auditLog);
     const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
 
-    approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1", policy.id, policyStore);
+    await approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1", policy.id, policyStore);
 
     expect(auditLog.entries()).toContainEqual(
       expect.objectContaining({ requestId: pending.id, decision: "request_approved", policyId: policy.id }),
@@ -201,7 +216,7 @@ describe("approveRequest", () => {
   // A policy-blocked approval is still a real event — it must leave an
   // audit trail, and the request must stay pending so a corrected, in-policy
   // approval attempt is still possible (not silently consumed on failure).
-  it("logs a policy-violation denial when approval would exceed the attached policy, and leaves the request pending", () => {
+  it("logs a policy-violation denial when approval would exceed the attached policy, and leaves the request pending", async () => {
     const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
     const policyStore = new PolicyStore();
     const policy = createPolicy({ name: "Email only", allowedScope: ["email:send"], maxTtlSeconds: 3600 }, "policy-manager-1", policyStore, auditLog);
@@ -213,7 +228,7 @@ describe("approveRequest", () => {
     );
 
     // ADR-010: the approver chooses the policy at approval time, not the requester at submission time.
-    expect(() => approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1", policy.id, policyStore)).toThrow(
+    await expect(approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1", policy.id, policyStore)).rejects.toThrow(
       PolicyViolationError,
     );
 
@@ -223,20 +238,20 @@ describe("approveRequest", () => {
     expect(entries[0]).toMatchObject({ decision: "request_denied", actor: "approver-1" });
   });
 
-  it("refuses to approve an unknown request id", () => {
+  it("refuses to approve an unknown request id", async () => {
     const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
-    expect(() => approveRequest("not-a-real-id", requestStore, tokenStore, auditLog, "approver-1")).toThrow(
+    await expect(approveRequest("not-a-real-id", requestStore, tokenStore, auditLog, "approver-1")).rejects.toThrow(
       UnknownRequestError,
     );
   });
 
   // Idempotency guardrail: approving twice must not issue two tokens.
-  it("refuses to approve the same request twice", () => {
+  it("refuses to approve the same request twice", async () => {
     const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
     const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
-    approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
+    await approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
-    expect(() => approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1")).toThrow(
+    await expect(approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1")).rejects.toThrow(
       RequestNotPendingError,
     );
   });
@@ -280,11 +295,84 @@ describe("denyRequest", () => {
     expect(() => denyRequest("not-a-real-id", requestStore, auditLog, "approver-1", "other")).toThrow(UnknownRequestError);
   });
 
-  it("refuses to deny an already-decided request", () => {
+  it("refuses to deny an already-decided request", async () => {
     const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
     const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
-    approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
+    await approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
 
     expect(() => denyRequest(pending.id, requestStore, auditLog, "approver-2", "other")).toThrow(RequestNotPendingError);
+  });
+});
+
+// ADR-013: the one legitimate path a real caller uses to receive a token's
+// secret after human approval — everything else in tokenRequest.ts only
+// ever produces hashes and ids.
+describe("claimTokenSecret", () => {
+  it("returns the tokenId and a secret that genuinely works against the real token", async () => {
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+    const token = await approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
+
+    const claimed = claimTokenSecret(pending.id, "agent-42", requestStore, auditLog);
+
+    expect(claimed.tokenId).toBe(token.id);
+    const decision = await enforceToken(token.id, claimed.secret, "email:send", tokenStore, auditLog);
+    expect(decision).toEqual({ allowed: true });
+  });
+
+  it("logs a token_secret_claimed entry on a successful claim", async () => {
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+    await approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
+
+    claimTokenSecret(pending.id, "agent-42", requestStore, auditLog);
+
+    expect(auditLog.entries()).toContainEqual(
+      expect.objectContaining({ requestId: pending.id, decision: "token_secret_claimed", subject: "agent-42" }),
+    );
+  });
+
+  it("refuses to claim for an unknown request id", () => {
+    const { requestStore, auditLog } = setup();
+    expect(() => claimTokenSecret("not-a-real-id", "agent-42", requestStore, auditLog)).toThrow(UnknownRequestError);
+  });
+
+  // The core guarantee: knowing a request's id (GET /requests/:id is public)
+  // is not enough — only the credential that originally submitted it can
+  // claim what it produced.
+  it("refuses to claim on behalf of a subject that did not submit the request, and audits the attempt", () => {
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+
+    expect(() => claimTokenSecret(pending.id, "someone-else", requestStore, auditLog)).toThrow(WrongSubjectError);
+    expect(auditLog.entries()).toContainEqual(
+      expect.objectContaining({ requestId: pending.id, decision: "denied", reasonCode: "wrong_subject" }),
+    );
+  });
+
+  it("refuses to claim a request that hasn't been approved yet", () => {
+    const { requestStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+
+    expect(() => claimTokenSecret(pending.id, "agent-42", requestStore, auditLog)).toThrow(RequestNotApprovedError);
+  });
+
+  it("refuses to claim a request that was denied", () => {
+    const { requestStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+    denyRequest(pending.id, requestStore, auditLog, "approver-1", "scope_too_broad");
+
+    expect(() => claimTokenSecret(pending.id, "agent-42", requestStore, auditLog)).toThrow(RequestNotApprovedError);
+  });
+
+  // The one-time guarantee — the whole point of not returning the secret
+  // synchronously to whoever approved it.
+  it("refuses a second claim once the secret has already been retrieved once", async () => {
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+    await approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1");
+    claimTokenSecret(pending.id, "agent-42", requestStore, auditLog);
+
+    expect(() => claimTokenSecret(pending.id, "agent-42", requestStore, auditLog)).toThrow(TokenSecretAlreadyClaimedError);
   });
 });

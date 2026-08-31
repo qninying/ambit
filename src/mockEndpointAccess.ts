@@ -47,6 +47,7 @@ function sleep(ms: number): Promise<void> {
 
 export async function accessMockEndpoint(
   tokenId: string,
+  providedSecret: string,
   system: MockSystem,
   verb: string,
   tokenStore: TokenStore,
@@ -62,7 +63,8 @@ export async function accessMockEndpoint(
   };
 
   const action = `${system}:${verb}`;
-  const decision = enforceToken(tokenId, action, tokenStore, auditLog, now);
+  // ADR-013: possession-checked inside enforceToken itself now.
+  const decision = await enforceToken(tokenId, providedSecret, action, tokenStore, auditLog, now);
   if (!decision.allowed) {
     return { allowed: false, reasonCode: decision.reasonCode };
   }
