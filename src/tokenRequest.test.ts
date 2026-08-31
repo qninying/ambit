@@ -181,6 +181,23 @@ describe("approveRequest", () => {
     );
   });
 
+  // ADR-010: which policy the approver applied has to be visible from the
+  // audit trail itself — a compliance officer shouldn't have to
+  // cross-reference the token's own policyId (which issueToken doesn't
+  // even persist onto the Token record) to find out.
+  it("records which policy the approver chose in the approval's own audit entry", () => {
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const policyStore = new PolicyStore();
+    const policy = createPolicy({ name: "Email only", allowedScope: ["email:send"], maxTtlSeconds: 3600 }, "policy-manager-1", policyStore, auditLog);
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+
+    approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1", policy.id, policyStore);
+
+    expect(auditLog.entries()).toContainEqual(
+      expect.objectContaining({ requestId: pending.id, decision: "request_approved", policyId: policy.id }),
+    );
+  });
+
   // A policy-blocked approval is still a real event — it must leave an
   // audit trail, and the request must stay pending so a corrected, in-policy
   // approval attempt is still possible (not silently consumed on failure).
@@ -189,13 +206,14 @@ describe("approveRequest", () => {
     const policyStore = new PolicyStore();
     const policy = createPolicy({ name: "Email only", allowedScope: ["email:send"], maxTtlSeconds: 3600 }, "policy-manager-1", policyStore, auditLog);
     const pending = requestToken(
-      { subject: "agent-42", scope: ["payment:charge"], ttlSeconds: 300, policyId: policy.id },
+      { subject: "agent-42", scope: ["payment:charge"], ttlSeconds: 300 },
       requestStore,
       anomalyDetector,
       auditLog,
     );
 
-    expect(() => approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1", policyStore)).toThrow(
+    // ADR-010: the approver chooses the policy at approval time, not the requester at submission time.
+    expect(() => approveRequest(pending.id, requestStore, tokenStore, auditLog, "approver-1", policy.id, policyStore)).toThrow(
       PolicyViolationError,
     );
 

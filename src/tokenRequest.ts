@@ -50,8 +50,12 @@ export class RequestNotPendingError extends Error {
 // Every submission — anomalous or not — does write one unconditional
 // `request_submitted` entry (below), which is what makes SDK/API usage
 // genuinely traceable rather than only visible when something goes wrong.
+// Deliberately excludes policyId from what a requester can submit — see
+// ADR-010. Which policy governs issuance is the approver's decision, made
+// at approval time (approveRequest, below), not something a requester
+// gets to pre-select for their own request.
 export function requestToken(
-  request: TokenRequest & { idempotencyKey?: string },
+  request: Omit<TokenRequest, "policyId"> & { idempotencyKey?: string },
   requestStore: RequestStore,
   anomalyDetector: AnomalyDetector,
   auditLog: AuditLog,
@@ -95,16 +99,22 @@ export function requestToken(
   return pending;
 }
 
-// policyStore is optional for the same reason issueToken's is: a request
-// that never named a policyId works exactly as before. One that did — set
-// by whoever submitted it via requestToken() — gets checked against it here,
-// at approval time, which is also where issueToken() actually runs.
+// ADR-010: policyId is the approver's own choice, supplied here at
+// approval time — not read from the pending request. A requester citing
+// their own policyId at submission time (the original design) made
+// "policy attached" a self-issued rubber stamp: nothing stopped a
+// requester from creating a maximally permissive policy and citing it on
+// their own request, and the Console had no way to show an approver which
+// policy (if any) was actually attached before they clicked Approve.
+// policyStore is optional for the same reason issueToken's is: approving
+// with no policyId works exactly as it always did.
 export function approveRequest(
   requestId: string,
   requestStore: RequestStore,
   tokenStore: TokenStore,
   auditLog: AuditLog,
   approver: string,
+  policyId?: string,
   policyStore?: PolicyStore,
   now: Date = new Date(),
 ): Token {
@@ -113,7 +123,7 @@ export function approveRequest(
   let token: Token;
   try {
     token = issueToken(
-      { subject: pending.subject, scope: pending.scope, ttlSeconds: pending.ttlSeconds, policyId: pending.policyId },
+      { subject: pending.subject, scope: pending.scope, ttlSeconds: pending.ttlSeconds, policyId },
       tokenStore,
       policyStore,
     );
@@ -140,6 +150,11 @@ export function approveRequest(
   auditLog.record({
     requestId,
     tokenId: token.id,
+    // ADR-010: which policy actually governed this issuance is now the
+    // approver's own decision — it belongs in the same audit entry as the
+    // decision itself, not left implicit. A compliance officer should be
+    // able to see this from the trail alone, not have to cross-reference.
+    policyId,
     subject: pending.subject,
     action: "approve_request",
     decision: "request_approved",
