@@ -21,6 +21,18 @@ import { CustomerDataRegistry } from "./customerData.js";
 import { InvalidRedactionRuleError, RedactionRuleStore, createRedactionRule } from "./redaction.js";
 import { accessCustomerData } from "./customerDataAccess.js";
 import { timingSafeStringEqual } from "./timingSafeCompare.js";
+import { verifyPassword } from "./passwordHash.js";
+import { createSessionToken, verifySessionToken } from "./sessionToken.js";
+
+// ADR-009 hardening: req.session is set only by requireSession (below),
+// once a token has genuinely verified — never trusted from anywhere else.
+declare global {
+  namespace Express {
+    interface Request {
+      session?: { username: string };
+    }
+  }
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -94,9 +106,80 @@ const defaultRedactionRule = createRedactionRule(
   auditLog,
 );
 
+// ADR-009 hardening: real operator authentication. ADMIN_USERNAME and
+// ADMIN_PASSWORD_HASH (generate with `npm run hash-password`, never a raw
+// password) are the one configured operator account — right-sized for a
+// single-operator demo, not a multi-user IdP integration. SESSION_TTL_MS
+// overridable, same "not hardcoded" treatment as every other threshold
+// here. No fallback for SESSION_SIGNING_SECRET — if it's unset, sessions
+// fail closed rather than silently signing with a default anyone could
+// guess by reading this source file.
+//
+// Read fresh per-request, not cached at module load — same reasoning as
+// requireAdminToggleKey's ADMIN_TOGGLE_KEY: rotatable without a restart,
+// and testable without a separate module instance per configuration.
+function getSessionConfig(): { signingSecret: string; ttlMs?: number } | null {
+  const signingSecret = process.env.SESSION_SIGNING_SECRET;
+  if (!signingSecret) return null;
+  return { signingSecret, ttlMs: envNumber("SESSION_TTL_MS") };
+}
+
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
+
+app.post("/auth/login", async (req, res) => {
+  const sessionConfig = getSessionConfig();
+  const configuredUsername = process.env.ADMIN_USERNAME;
+  const configuredHash = process.env.ADMIN_PASSWORD_HASH;
+  if (!sessionConfig || !configuredUsername || !configuredHash) {
+    res.status(503).json({ error: "authentication is not configured — set ADMIN_USERNAME, ADMIN_PASSWORD_HASH, and SESSION_SIGNING_SECRET" });
+    return;
+  }
+  const { username, password } = req.body ?? {};
+  if (typeof username !== "string" || typeof password !== "string") {
+    res.status(400).json({ error: "username (string) and password (string) are required" });
+    return;
+  }
+  // Username compared timing-safe too — not as sensitive as the password,
+  // but there's no reason to leave a cheaper side channel open right next
+  // to a hardened one.
+  const usernameMatches = timingSafeStringEqual(username, configuredUsername);
+  const passwordMatches = await verifyPassword(password, configuredHash);
+  if (!usernameMatches || !passwordMatches) {
+    auditLog.record({ subject: username, action: "login", decision: "denied", reasonCode: "invalid_credentials" });
+    res.status(401).json({ error: "invalid username or password" });
+    return;
+  }
+  auditLog.record({ subject: username, action: "login", decision: "allowed" });
+  const token = createSessionToken(username, sessionConfig);
+  res.status(200).json({ token });
+});
+
+// Applied to every route where the caller's real, verified identity
+// matters — starting with approve/deny (ADR-009 item 2: a verified
+// approver identity, not a free-text field). Never throws; a missing or
+// invalid session is a clean 401, not a crash.
+function requireSession(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const sessionConfig = getSessionConfig();
+  if (!sessionConfig) {
+    res.status(503).json({ error: "authentication is not configured" });
+    return;
+  }
+  const header = req.header("authorization") ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+  if (!token) {
+    res.status(401).json({ error: "missing Authorization: Bearer <token> header" });
+    return;
+  }
+  const result = verifySessionToken(token, sessionConfig);
+  if (!result.valid) {
+    res.status(401).json({ error: `invalid session: ${result.reason}` });
+    return;
+  }
+  req.session = { username: result.username };
+  next();
+}
 
 // POST /requests — submit a token request. Sits pending until an approver
 // acts on it; no token exists yet.
@@ -145,15 +228,13 @@ app.get("/requests/:id", (req, res) => {
   res.json(pending);
 });
 
-// ADR-010: policyId is the approver's own choice here, made at approval
+// ADR-009 hardening: approver is now the authenticated session's own
+// username — never something the caller types into the request body.
+// ADR-010: policyId is still the approver's own choice, made at approval
 // time — not inherited from anything the requester submitted.
-app.post("/requests/:id/approve", (req, res) => {
-  const approver = req.body?.approver;
+app.post<{ id: string }>("/requests/:id/approve", requireSession, (req, res) => {
+  const approver = req.session!.username;
   const policyId = req.body?.policyId;
-  if (typeof approver !== "string" || approver.length === 0) {
-    res.status(400).json({ error: "approver (string) is required" });
-    return;
-  }
   try {
     const token = approveRequest(
       req.params.id,
@@ -178,16 +259,14 @@ app.post("/requests/:id/approve", (req, res) => {
 
 const VALID_DENIAL_REASONS: DenialReason[] = ["scope_too_broad", "policy_violation", "unverified_subject", "duplicate_request", "other"];
 
+// ADR-009 hardening: approver is the authenticated session's own username,
+// same as approve above.
 // REQ-010: reasonCode is required here, same treatment as
 // POST /tokens/:id/revoke's own reasonCode whitelist — a denial with no
 // recorded reason is exactly the gap this story exists to close.
-app.post("/requests/:id/deny", (req, res) => {
-  const approver = req.body?.approver;
+app.post<{ id: string }>("/requests/:id/deny", requireSession, (req, res) => {
+  const approver = req.session!.username;
   const reasonCode = req.body?.reasonCode as DenialReason | undefined;
-  if (typeof approver !== "string" || approver.length === 0) {
-    res.status(400).json({ error: "approver (string) is required" });
-    return;
-  }
   if (!reasonCode || !VALID_DENIAL_REASONS.includes(reasonCode)) {
     res.status(400).json({ error: `reasonCode must be one of: ${VALID_DENIAL_REASONS.join(", ")}` });
     return;

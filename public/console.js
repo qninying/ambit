@@ -46,6 +46,38 @@ function iconList() {
 
 // ---------- data layer ----------
 
+// ADR-009 hardening: the session token is per-browser (localStorage, not a
+// module variable), so it survives a page reload within its real TTL —
+// this console is a live admin tool, not something that should force a
+// re-login on every refresh. It's never sent on plain GETs (every read in
+// this console stays unauthenticated, same as the API itself), only on the
+// mutating calls that now actually require it.
+const SESSION_STORAGE_KEY = "ambit_session_token";
+
+function getSessionToken() {
+  try {
+    return localStorage.getItem(SESSION_STORAGE_KEY);
+  } catch {
+    return null; // private-browsing / storage blocked — treat as logged out
+  }
+}
+
+function setSessionToken(token) {
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY, token);
+  } catch {
+    /* storage blocked — session just won't survive a reload this time */
+  }
+}
+
+function clearSessionToken() {
+  try {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    /* nothing to clear if storage was never reachable */
+  }
+}
+
 async function fetchJson(path) {
   const res = await fetch(path, { cache: "no-store" });
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
@@ -53,8 +85,19 @@ async function fetchJson(path) {
 }
 
 async function postJson(path, body) {
-  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const headers = { "Content-Type": "application/json" };
+  const token = getSessionToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    // The session was real but is no longer valid (expired, or the server
+    // restarted and rotated nothing since there's nothing to rotate — but
+    // an old signed token from before a signing-secret change would also
+    // land here) — clear it so the UI asks to log in again instead of
+    // silently retrying with a token that will never work.
+    clearSessionToken();
+  }
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
@@ -243,9 +286,19 @@ function renderRequests(main) {
 async function decideRequest(id, action) {
   const card = document.querySelector(`[data-id="${id}"]`);
   const toast = card.querySelector(`[data-toast-for="${id}"]`);
+  // ADR-009 hardening: approve/deny require a real session now — approver
+  // is derived from it server-side, never sent by the client. Checked
+  // client-side first purely as a UX nicety (skip an obviously-doomed
+  // round-trip); the server's own requireSession check is what actually
+  // enforces this.
+  if (!getSessionToken()) {
+    toast.textContent = "Log in first — see the sidebar.";
+    toast.className = "toast error";
+    return;
+  }
   card.querySelectorAll("button, select").forEach((el) => (el.disabled = true));
   try {
-    const body = { approver: "demo-approver" };
+    const body = {};
     if (action === "approve") {
       const select = card.querySelector(".approve-policy-select");
       if (select && select.value) body.policyId = select.value;
@@ -257,6 +310,7 @@ async function decideRequest(id, action) {
     if (action === "deny") body.reasonCode = "other";
     await postJson(`/requests/${id}/${action}`, body);
   } catch (err) {
+    renderAuthWidget(); // in case postJson cleared an expired session on a 401
     toast.textContent = err.message;
     toast.className = "toast error";
     card.querySelectorAll("button, select").forEach((el) => (el.disabled = false));
@@ -516,6 +570,68 @@ function renderDataAsOf() {
   el.innerHTML = `<span class="live-dot"></span>Live · updated ${relTime(STATE.lastFetchedAt.toISOString())}`;
 }
 
+// Reads the username out of the token's own payload purely for display —
+// the payload is signed, not secret, so this is safe to decode client-side,
+// but it is NOT a verification step. The server is the only thing that
+// actually verifies a session; this just avoids an extra round-trip to
+// show "signed in as X" in the sidebar.
+function decodeSessionUsername(token) {
+  try {
+    const [payloadB64] = token.split(".");
+    const payload = JSON.parse(atob(payloadB64.replace(/-/g, "+").replace(/_/g, "/")));
+    return typeof payload.username === "string" ? payload.username : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderAuthWidget() {
+  const el = document.getElementById("auth-widget");
+  const token = getSessionToken();
+  const username = token ? decodeSessionUsername(token) : null;
+
+  if (username) {
+    el.innerHTML = `
+      <div class="auth-status">
+        <div>Signed in as <strong>${esc(username)}</strong></div>
+        <button class="btn-link" id="auth-logout">Log out</button>
+      </div>
+    `;
+    document.getElementById("auth-logout").addEventListener("click", () => {
+      clearSessionToken();
+      renderAuthWidget();
+      render();
+    });
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="auth-login">
+      <div style="font-size:11.5px; color:var(--muted-weak); margin-bottom:6px;">Not signed in — required to approve or deny requests.</div>
+      <input id="auth-username" placeholder="username" autocomplete="username" />
+      <input id="auth-password" type="password" placeholder="password" autocomplete="current-password" />
+      <button class="btn btn-primary btn-sm" id="auth-login-submit">Log in</button>
+      <div class="toast" id="auth-toast"></div>
+    </div>
+  `;
+  const submit = async () => {
+    const username = document.getElementById("auth-username").value;
+    const password = document.getElementById("auth-password").value;
+    const toast = document.getElementById("auth-toast");
+    try {
+      const { token } = await postJson("/auth/login", { username, password });
+      setSessionToken(token);
+      renderAuthWidget();
+      render();
+    } catch (err) {
+      toast.textContent = err.message;
+      toast.className = "toast error";
+    }
+  };
+  document.getElementById("auth-login-submit").addEventListener("click", submit);
+  document.getElementById("auth-password").addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+}
+
 function currentTabId() {
   const id = (location.hash || "#overview").slice(1).split("/")[0];
   return TABS.some((t) => t.id === id) ? id : "overview";
@@ -535,6 +651,7 @@ async function render() {
   const tabId = currentTabId();
   renderNav(tabId);
   renderDataAsOf();
+  renderAuthWidget();
   const [title, desc] = TAB_COPY[tabId];
   document.getElementById("page-title").textContent = title;
   document.getElementById("page-desc").textContent = desc;
@@ -566,8 +683,13 @@ async function render() {
 // destructive re-render while any field inside the tab content has focus.
 function formFieldIsFocused() {
   const active = document.activeElement;
+  if (!active || !["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName)) return false;
   const tabContent = document.getElementById("tab-content");
-  return !!(active && tabContent && tabContent.contains(active) && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName));
+  const authWidget = document.getElementById("auth-widget");
+  // Login lives in the sidebar, outside #tab-content — a poll re-render
+  // wiping mid-typed login credentials would be the same class of bug
+  // this check already exists to prevent for the tab-content forms.
+  return !!((tabContent && tabContent.contains(active)) || (authWidget && authWidget.contains(active)));
 }
 
 async function tick(force = false) {

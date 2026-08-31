@@ -8,12 +8,24 @@
 
 import { createServer, type Server } from "node:http";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { hashPassword } from "./passwordHash.js";
 import { app } from "./server.js";
 
 let server: Server;
 let baseUrl: string;
 
+const TEST_ADMIN_USERNAME = "test-admin";
+const TEST_ADMIN_PASSWORD = "correct horse battery staple";
+const TEST_SESSION_SECRET = "test-session-signing-secret-do-not-use-in-prod";
+
 beforeAll(async () => {
+  // Auth config is read fresh per-request in server.ts specifically so
+  // tests can configure it here, after import, rather than needing a
+  // separate module instance per configuration.
+  process.env.ADMIN_USERNAME = TEST_ADMIN_USERNAME;
+  process.env.ADMIN_PASSWORD_HASH = await hashPassword(TEST_ADMIN_PASSWORD);
+  process.env.SESSION_SIGNING_SECRET = TEST_SESSION_SECRET;
+
   server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const address = server.address();
@@ -28,6 +40,19 @@ afterAll(async () => {
 afterEach(() => {
   delete process.env.ADMIN_TOGGLE_KEY;
 });
+
+// Real login, real session token — every test that needs to approve/deny
+// gets one of these rather than a hand-rolled fake, so this suite exercises
+// the actual auth flow, not a bypass of it.
+async function login(): Promise<string> {
+  const res = await fetch(`${baseUrl}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: TEST_ADMIN_PASSWORD }),
+  });
+  const body = await res.json();
+  return body.token;
+}
 
 describe("POST /circuit-breaker/simulate-outage — admin toggle gate", () => {
   it("refuses with 403 when ADMIN_TOGGLE_KEY is not configured at all — no accidental default-open door", async () => {
@@ -133,10 +158,11 @@ describe("POST /tokens/:id/customer-data/:customerId — ignores a caller-suppli
       body: JSON.stringify({ subject: "server-test-agent", scope, ttlSeconds: 300 }),
     });
     const { id: requestId } = await reqRes.json();
+    const sessionToken = await login();
     const approveRes = await fetch(`${baseUrl}/requests/${requestId}/approve`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ approver: "server-test-approver" }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({}),
     });
     const token = await approveRes.json();
     return token.id;
@@ -198,10 +224,11 @@ describe("Policy selection is the approver's choice, not the requester's", () =>
     // Approve with NO policyId — if the server had inherited the
     // requester's submitted one, this approval would be checked against
     // the attacker's permissive policy instead of going through unchecked.
+    const sessionToken = await login();
     const approveRes = await fetch(`${baseUrl}/requests/${pending.id}/approve`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ approver: "policy-test-approver" }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({}),
     });
     expect(approveRes.status).toBe(200);
   });
@@ -223,10 +250,11 @@ describe("Policy selection is the approver's choice, not the requester's", () =>
 
     // The approver attaches a real, restrictive policy at approval time —
     // this request's scope (payment:charge) exceeds it, so it must fail.
+    const sessionToken = await login();
     const approveRes = await fetch(`${baseUrl}/requests/${pending.id}/approve`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ approver: "policy-test-approver-2", policyId: restrictivePolicy.id }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({ policyId: restrictivePolicy.id }),
     });
     expect(approveRes.status).toBe(400); // PolicyViolationError, caught by the generic error middleware
     const body = await approveRes.json();
@@ -234,5 +262,109 @@ describe("Policy selection is the approver's choice, not the requester's", () =>
 
     const stillPending = await fetch(`${baseUrl}/requests/${pending.id}`).then((r) => r.json());
     expect(stillPending.status).toBe("pending"); // denied by policy, not consumed — a corrected retry stays possible
+  });
+});
+
+// ADR-009 hardening: real operator authentication. Verified over real HTTP
+// against the actual login endpoint and the actual session gate — not
+// against the underlying primitives in isolation (those already have their
+// own unit tests in sessionToken.test.ts/passwordHash.test.ts).
+describe("POST /auth/login and requireSession", () => {
+  it("issues a real session token for the correct username and password", async () => {
+    const res = await fetch(`${baseUrl}/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: TEST_ADMIN_PASSWORD }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(typeof body.token).toBe("string");
+  });
+
+  it("refuses login with the wrong password, and logs the attempt", async () => {
+    const res = await fetch(`${baseUrl}/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: "wrong-password" }),
+    });
+    expect(res.status).toBe(401);
+
+    const entries: Array<Record<string, unknown>> = await fetch(`${baseUrl}/audit-log`).then((r) => r.json());
+    expect(entries).toContainEqual(
+      expect.objectContaining({ action: "login", decision: "denied", reasonCode: "invalid_credentials", subject: TEST_ADMIN_USERNAME }),
+    );
+  });
+
+  it("refuses login when auth is not configured at all, rather than defaulting open", async () => {
+    const original = process.env.SESSION_SIGNING_SECRET;
+    delete process.env.SESSION_SIGNING_SECRET;
+    try {
+      const res = await fetch(`${baseUrl}/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: TEST_ADMIN_PASSWORD }),
+      });
+      expect(res.status).toBe(503);
+    } finally {
+      process.env.SESSION_SIGNING_SECRET = original;
+    }
+  });
+
+  it("refuses to approve a request with no session at all", async () => {
+    const reqRes = await fetch(`${baseUrl}/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subject: "auth-test-agent", scope: ["email:send"], ttlSeconds: 300 }),
+    });
+    const pending = await reqRes.json();
+
+    const approveRes = await fetch(`${baseUrl}/requests/${pending.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(approveRes.status).toBe(401);
+  });
+
+  it("refuses to approve a request with a tampered/invalid session token", async () => {
+    const reqRes = await fetch(`${baseUrl}/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subject: "auth-test-agent-2", scope: ["email:send"], ttlSeconds: 300 }),
+    });
+    const pending = await reqRes.json();
+
+    const approveRes = await fetch(`${baseUrl}/requests/${pending.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer not-a-real-session-token" },
+      body: JSON.stringify({}),
+    });
+    expect(approveRes.status).toBe(401);
+  });
+
+  // The actual point of this whole change: approver is the real,
+  // authenticated identity — never something the client could just type in.
+  it("derives the audit trail's approver from the real session, ignoring any approver the client sends", async () => {
+    const reqRes = await fetch(`${baseUrl}/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ subject: "auth-test-agent-3", scope: ["email:send"], ttlSeconds: 300 }),
+    });
+    const pending = await reqRes.json();
+    const sessionToken = await login();
+
+    await fetch(`${baseUrl}/requests/${pending.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      // A malicious or confused client trying to claim a different identity —
+      // must be ignored entirely.
+      body: JSON.stringify({ approver: "someone-else-entirely" }),
+    });
+
+    const entries: Array<Record<string, unknown>> = await fetch(`${baseUrl}/audit-log`).then((r) => r.json());
+    expect(entries).toContainEqual(
+      expect.objectContaining({ requestId: pending.id, decision: "request_approved", actor: TEST_ADMIN_USERNAME }),
+    );
+    expect(entries.some((e) => e.actor === "someone-else-entirely")).toBe(false);
   });
 });
