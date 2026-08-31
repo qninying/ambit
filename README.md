@@ -20,10 +20,14 @@ npm run start
 ```
 
 Then open `http://localhost:4000/console.html` — a live admin console
-(Overview, Requests, Tokens, Policies, Audit Log) reading real data from the
-running server, not sample data. Submit a token request, approve or deny it,
-watch a real token appear in the Tokens tab, revoke it, and see the whole
-sequence land in the Audit Log with its chain-verified badge.
+(Overview, Requests, Tokens, Policies, Redaction Rules, Audit Log, System)
+reading real data from the running server, not sample data. Submit a token
+request, approve or deny it, watch a real token appear in the Tokens tab,
+delegate a narrower child token from it, access a demo customer record and
+watch field-level redaction happen live, revoke it, and see the whole
+sequence land in the Audit Log with its chain-verified badge. ⌘K opens a
+command palette to jump between sections; the theme toggle switches
+light/dark, both persisted per-browser.
 
 ## What's real
 
@@ -76,6 +80,22 @@ in a unit test. Current count: **153 tests passing.**
   fresh on every issuance — editing a policy changes what the *next*
   issuance allows, proven by re-issuing after modifying, not by inspecting a
   stored record.
+
+**Console**
+- Every backend capability above has a real UI surface, not just an API —
+  including delegation, redaction-rule authoring, and customer-data access,
+  which previously existed only as tested backend logic with nothing wired
+  up to see them. The Tokens tab's token-detail view has inline "Delegate a
+  narrower token" and "Access customer data" panels calling the real
+  `POST /tokens/:id/delegate` and `POST /tokens/:id/customer-data/:customerId`
+  routes; a Redaction Rules tab lists and creates rules against the real
+  `GET`/`POST /redaction-rules`; a System tab shows live circuit-breaker
+  health (`GET /circuit-breaker`, polled) plus an admin-key-gated
+  fault-injection control for `POST /circuit-breaker/simulate-outage`,
+  visually separated as a "danger zone" from normal operator actions.
+- `public/js/` — split from a single flat `console.js` into ES modules
+  (native `type="module"`, no bundler) once the new screens and dark-mode
+  chrome pushed it past this project's own file-size convention.
 
 **Client SDK**
 - [`sdk/ambitClient.ts`](sdk/ambitClient.ts) — `AmbitClient`, the thing an

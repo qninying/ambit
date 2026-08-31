@@ -4,28 +4,45 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Ambit Console</title>
-<link rel="stylesheet" href="console.css?v=1" />
+<script>
+  // Synchronous, before first paint: resolves and applies the theme before
+  // the stylesheet or any module script runs, so there is never a flash of
+  // the wrong theme. theme.js takes ownership of this attribute afterward.
+  (function () {
+    try {
+      var stored = localStorage.getItem("ambit.theme");
+      var theme = stored === "light" || stored === "dark"
+        ? stored
+        : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "light");
+    }
+  })();
+</script>
+<link rel="stylesheet" href="console.css" />
 </head>
 <body>
-  <aside class="sidebar">
-    <div class="brand">
-      <div class="brand-mark">A</div>
-      <div>
-        <div class="brand-name">Ambit</div>
-        <div class="brand-sub">Access control console</div>
+  <header class="appbar">
+    <div class="appbar-left">
+      <div class="brand-sm">
+        <div class="brand-mark-sm">A</div>
+        <span class="brand-name-sm">Ambit</span>
       </div>
+      <nav class="topnav" id="nav"></nav>
     </div>
-    <nav class="nav" id="nav"></nav>
-    <div class="sidebar-footer">
-      <div id="data-as-of" class="data-as-of"></div>
-    </div>
-  </aside>
+    <div class="appbar-right" id="topbar-controls"></div>
+  </header>
 
   <main>
     <div class="topbar">
-      <div>
-        <h1 class="page-title" id="page-title">Overview</h1>
-        <p class="page-desc" id="page-desc"></p>
+      <div class="breadcrumbs" id="breadcrumbs"></div>
+      <div class="page-title-row">
+        <div>
+          <h1 class="page-title" id="page-title">Overview</h1>
+          <p class="page-desc" id="page-desc"></p>
+        </div>
+        <div class="page-sync" id="data-as-of"></div>
       </div>
     </div>
     <div id="tab-content" class="fade-in">
@@ -33,6 +50,6 @@
     </div>
   </main>
 
-  <script src="console.js?v=5"></script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>

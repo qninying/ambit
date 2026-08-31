@@ -1,9 +1,12 @@
 # ADR-007: Single Tabbed Console, Enterprise-Density Design — Not a Consumer-App Layout
 
-**Status:** Implemented — built, live-verified across all five tabs.
+**Status:** Implemented — built, live-verified across all five tabs. See the
+2026-08-30 amendment below for the shell's current shape.
 **Owner:** Quincy Nkwain Ninying
 **Date:** 2026-08-26 (STORY-007)
-**Component:** `public/console.html`, `public/console.css`, `public/console.js`
+**Component:** `public/console.html`, `public/console.css`, `public/js/*` (was a
+single `public/console.js` until the 2026-08-30 redesign split it into ES
+modules — see amendment)
 
 ---
 
@@ -67,3 +70,37 @@ A genuinely geographic feature of the domain (e.g. region-scoped policies tied
 to real deployment locations) would be a legitimate reason to reconsider
 map-based visualization for *that specific feature* — not a reason to revisit
 the console's overall layout philosophy.
+
+## 2026-08-30 amendment: dark-rail sidebar replaced with a command-bar shell
+
+The "dense enterprise console" decision above still stands — what changed is
+*which* enterprise shell pattern expresses it. The original build (STORY-007)
+used a fixed dark-navy left sidebar + light content area, the same reference
+class named above (Okta, AWS IAM). User feedback during a full visual
+redesign pass: this exact shape (dark rail + light content + topbar KPI
+cards) was indistinguishable from another of the user's own products
+(internally called "CoreOps"), and read as generic regardless of palette —
+the risk this ADR's own Option A/B table didn't anticipate, since it only
+weighed map-centric-minimalism against dense-enterprise-console, not against
+a second dense-enterprise-console that happens to look the same.
+
+Replaced with a command-bar-first shell: no persistent sidebar, a slim
+translucent top app-bar (wordmark + horizontal section links + a ⌘K command
+palette as the primary navigation method, closer to Linear/Raycast/Vercel
+than Okta/AWS). The KPI-card grid on Overview was also flattened into a
+single bordered metrics strip with internal dividers rather than six separate
+boxed cards, addressing the redesign brief's own "avoid excessive cards or
+boxed sections" guidance that the original card grid had drifted from.
+
+Console split from one flat `public/console.js` into ES modules under
+`public/js/` (no build step added — native `type="module"` script tags,
+still zero framework, zero bundler) purely to keep each file under this
+project's ~500-line convention once dark mode, the command palette, and four
+new screens (Redaction Rules, System/circuit-breaker health, and Delegate/
+customer-data-access panels on token detail) were added. All existing
+polling, hash-routing, and focus-preserving re-render logic (the "real bug
+found building this" noted above) carried over unchanged — verified live in
+the Browser pane, not just asserted.
+
+This remains a dense, real-data-only, no-sample-mode console per the original
+decision; only the chrome around it changed.
