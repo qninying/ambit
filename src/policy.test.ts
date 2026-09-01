@@ -1,10 +1,34 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuditLog } from "./auditLog.js";
 import { InvalidPolicyError, PolicyStore, UnknownPolicyError, createPolicy, modifyPolicy } from "./policy.js";
 
 function setup() {
   return { store: new PolicyStore(), auditLog: new AuditLog() };
 }
+
+// ADR-014
+describe("PolicyStore persistence", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "ambit-policystore-test-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("a policy created before a restart, and a later modification, both survive one", () => {
+    const file = join(dir, "policies.jsonl");
+    const auditLog = new AuditLog();
+    const before = new PolicyStore(undefined, file);
+    const policy = createPolicy({ name: "Email only", allowedScope: ["email:send"], maxTtlSeconds: 3600 }, "policy-manager-1", before, auditLog);
+    modifyPolicy(policy.id, { allowedScope: ["email:send", "crm:read"] }, "policy-manager-1", before, auditLog);
+
+    const after = new PolicyStore(undefined, file);
+    const revived = after.get(policy.id);
+    expect(revived?.allowedScope).toEqual(["email:send", "crm:read"]);
+    expect(revived?.createdAt).toBeInstanceOf(Date);
+    expect(revived?.updatedAt).toBeInstanceOf(Date);
+  });
+});
 
 describe("createPolicy", () => {
   // Acceptance: "Given a policy, when it is created, then it defines token

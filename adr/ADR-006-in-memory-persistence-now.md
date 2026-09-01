@@ -76,3 +76,14 @@ sessions, would justify moving to something like CoreOps's own ADR-005
 pattern (append-only JSONL, zero new dependency, rehydrate on start) as the
 smallest real step — not a database, unless query needs actually grow beyond
 `get`/`list`.
+
+## Update (2026-09-01): the named graduation path, taken
+
+See [ADR-014](ADR-014-persistence-via-append-only-jsonl.md) — exactly the
+path this ADR named, taken once ADR-009's other three items were closed.
+Every store now supports optional JSONL persistence via `AMBIT_DATA_DIR`,
+`get`/`save`/`list` unchanged on every one, live-verified across a real
+process restart. This ADR's own reasoning (why in-memory first, what the
+next step would look like) is left as-written above rather than rewritten —
+it was the accurate record of the decision at the time, and it correctly
+predicted its own successor.

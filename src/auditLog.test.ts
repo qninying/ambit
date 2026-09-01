@@ -1,5 +1,58 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuditLog, MissingReasonCodeError, computeEntryHash, verifyAuditChain } from "./auditLog.js";
+
+// ADR-014: the audit log is the most safety-critical of the six stores this
+// ADR touches — the real proof isn't just "entries survive a restart," it's
+// that the hash chain a compliance reviewer would check still verifies
+// clean, and that a NEW entry recorded after the restart correctly links to
+// the last entry that existed before it rather than starting a fresh chain.
+describe("AuditLog persistence (ADR-014)", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "ambit-auditlog-test-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("entries recorded before a restart are still there, in order, after one", () => {
+    const file = join(dir, "audit-log.jsonl");
+    const before = new AuditLog(file);
+    before.record({ subject: "agent-1", action: "email:send", decision: "allowed" });
+    before.record({ subject: "agent-2", action: "crm:read", decision: "allowed" });
+
+    const after = new AuditLog(file);
+    const entries = after.entries();
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.subject)).toEqual(["agent-1", "agent-2"]);
+    expect(entries[0]?.occurredAt).toBeInstanceOf(Date);
+  });
+
+  it("the hash chain still verifies clean after rehydration", () => {
+    const file = join(dir, "audit-log.jsonl");
+    const before = new AuditLog(file);
+    before.record({ subject: "agent-1", action: "email:send", decision: "allowed" });
+    before.record({ subject: "agent-1", action: "payment:charge", decision: "denied", reasonCode: "out_of_scope" });
+
+    const after = new AuditLog(file);
+    expect(after.verify()).toEqual({ valid: true, brokenAtId: null, entriesChecked: 2 });
+  });
+
+  // The real point of persisting an append-only log at all: a new entry
+  // recorded after a restart must link to the real last entry from before
+  // it, not start a fresh chain that would make the pre-restart history
+  // unverifiable against what comes after.
+  it("a new entry recorded after a restart correctly links to the last pre-restart entry", () => {
+    const file = join(dir, "audit-log.jsonl");
+    const before = new AuditLog(file);
+    const first = before.record({ subject: "agent-1", action: "email:send", decision: "allowed" });
+
+    const after = new AuditLog(file);
+    const second = after.record({ subject: "agent-1", action: "crm:read", decision: "allowed" });
+
+    expect(second.previousHash).toBe(first.hash);
+    expect(after.verify()).toEqual({ valid: true, brokenAtId: null, entriesChecked: 2 });
+  });
+});
 
 describe("AuditLog", () => {
   // REQ-010, structural guarantee: not just "every call site today happens

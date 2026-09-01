@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuditLog } from "./auditLog.js";
 import { InvalidRedactionRuleError, RedactionRuleStore, REDACTION_MASK, applyRedaction, createRedactionRule } from "./redaction.js";
 import type { CustomerRecord } from "./customerData.js";
@@ -6,6 +9,24 @@ import type { CustomerRecord } from "./customerData.js";
 function setup() {
   return { store: new RedactionRuleStore(), auditLog: new AuditLog() };
 }
+
+// ADR-014
+describe("RedactionRuleStore persistence", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "ambit-redactionrule-test-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("a rule created before a restart is still there, unchanged, after one", () => {
+    const file = join(dir, "redaction-rules.jsonl");
+    const auditLog = new AuditLog();
+    const before = new RedactionRuleStore(file);
+    const rule = createRedactionRule({ name: "PII", sensitiveFields: { ssn: "customer:read:ssn" } }, "privacy-officer-1", before, auditLog);
+
+    const after = new RedactionRuleStore(file);
+    expect(after.get(rule.id)).toEqual(rule);
+    expect(after.get(rule.id)?.createdAt).toBeInstanceOf(Date);
+  });
+});
 
 const SAMPLE_CUSTOMER: CustomerRecord = {
   id: "cust-001",

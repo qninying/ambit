@@ -15,6 +15,7 @@
 import { randomBytes } from "node:crypto";
 import type { AuditLog } from "./auditLog.js";
 import { hashPassword, verifyPassword } from "./passwordHash.js";
+import { appendJsonLine, rehydrateJsonLines } from "./jsonlStore.js";
 
 export interface AgentIdentity {
   id: string;
@@ -42,11 +43,30 @@ export class DuplicateAgentIdentityError extends Error {
   }
 }
 
+function reviveAgentIdentity(raw: unknown): AgentIdentity {
+  const i = raw as AgentIdentity & { createdAt: string };
+  return { ...i, createdAt: new Date(i.createdAt) };
+}
+
 export class AgentIdentityStore {
   #identities = new Map<string, AgentIdentity>();
+  #persistTo?: string;
+
+  // ADR-014: only secretHash is ever persisted — the same field that was
+  // already the only thing kept in memory beyond the one-time registration
+  // response. No new secret-handling risk here.
+  constructor(persistTo?: string) {
+    this.#persistTo = persistTo;
+    if (persistTo) {
+      for (const identity of rehydrateJsonLines(persistTo, reviveAgentIdentity)) {
+        this.#identities.set(identity.id, identity);
+      }
+    }
+  }
 
   save(identity: AgentIdentity): void {
     this.#identities.set(identity.id, identity);
+    if (this.#persistTo) appendJsonLine(this.#persistTo, identity);
   }
 
   get(id: string): AgentIdentity | undefined {

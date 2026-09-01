@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuditLog } from "./auditLog.js";
 import {
   AgentIdentityStore,
@@ -11,6 +14,25 @@ import {
 function setup() {
   return { store: new AgentIdentityStore(), auditLog: new AuditLog() };
 }
+
+// ADR-014
+describe("AgentIdentityStore persistence", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "ambit-agentidentity-test-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("an identity registered before a restart authenticates correctly after one", async () => {
+    const file = join(dir, "agent-identities.jsonl");
+    const auditLog = new AuditLog();
+    const before = new AgentIdentityStore(file);
+    const { credential } = await registerAgentIdentity({ subject: "billing-agent" }, "operator-1", before, auditLog);
+
+    const after = new AgentIdentityStore(file);
+    const identity = await authenticateAgent(credential, after);
+    expect(identity?.subject).toBe("billing-agent");
+    expect(identity?.createdAt).toBeInstanceOf(Date);
+  });
+});
 
 describe("registerAgentIdentity", () => {
   it("creates an identity and returns a credential in the id.secret shape", async () => {

@@ -15,3 +15,6 @@ build/
 
 # OS cruft
 .DS_Store
+
+# ADR-014: runtime-generated JSONL persistence (AMBIT_DATA_DIR) — state, not source
+/data/

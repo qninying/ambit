@@ -5,6 +5,7 @@
 
 import type { AuditLog } from "./auditLog.js";
 import type { CircuitBreaker } from "./circuitBreaker.js";
+import { appendJsonLine, rehydrateJsonLines } from "./jsonlStore.js";
 
 export interface Policy {
   id: string;
@@ -36,17 +37,33 @@ export class UnknownPolicyError extends Error {
   }
 }
 
+function revivePolicy(raw: unknown): Policy {
+  const p = raw as Policy & { createdAt: string; updatedAt: string };
+  return { ...p, createdAt: new Date(p.createdAt), updatedAt: new Date(p.updatedAt) };
+}
+
 export class PolicyStore {
   #policies = new Map<string, Policy>();
   #breaker?: CircuitBreaker;
+  #persistTo?: string;
 
   // Same optional-breaker shape as TokenStore — see that file's comment.
-  constructor(breaker?: CircuitBreaker) {
+  // ADR-014: persistTo is the same optional-persistence shape too.
+  constructor(breaker?: CircuitBreaker, persistTo?: string) {
     this.#breaker = breaker;
+    this.#persistTo = persistTo;
+    if (persistTo) {
+      for (const policy of rehydrateJsonLines(persistTo, revivePolicy)) {
+        this.#policies.set(policy.id, policy);
+      }
+    }
   }
 
   save(policy: Policy): void {
-    this.#guarded(() => this.#policies.set(policy.id, policy));
+    this.#guarded(() => {
+      this.#policies.set(policy.id, policy);
+      if (this.#persistTo) appendJsonLine(this.#persistTo, policy);
+    });
   }
 
   get(id: string): Policy | undefined {

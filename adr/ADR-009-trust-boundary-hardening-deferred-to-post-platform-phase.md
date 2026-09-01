@@ -93,3 +93,20 @@ See [ADR-012](ADR-012-agent-caller-authentication-second-slice.md) for the full 
 See [ADR-013](ADR-013-token-possession-proof.md) for the full design: `enforceToken`/`delegateToken`/`accessCustomerData`/`accessMockEndpoint` now require proof of possession (a per-token secret, scrypt-hashed, never the public id alone) before doing anything else — including before disclosing any of the detailed status information STORY-010 added. **This closes item 3 (token possession proof) for the four routes that actually exercise a token's authority.** `POST /tokens/:id/revoke` remains deliberately unauthenticated — revocation is a management action, not a use of the token's own authority, and stays out of this item's scope on purpose. `POST /policies`, `PATCH /policies/:id`, and `POST /redaction-rules` remain fully open — item 1 (caller authentication) was only ever closed for `POST /requests` (ADR-012), not every mutating route. Item 4 (real persistence) is untouched, still deferred to its own separate phase.
 
 Three slices in: **all three items this hardening phase was actually scoped to close (caller authentication for request submission, verified approver identity, token possession proof) are now closed for the specific routes each targeted.** This is not the same as "every route is now authenticated" — it never was; the phase was scoped from the start as three targeted slices, not a blanket sweep, and that scoping is what let each slice ship as a real, complete, verified piece of work rather than a long-running partial effort. What remains open — policy/redaction-rule management routes, revocation, and persistence — is real and named, not implied closed by this update.
+
+## Update (2026-09-01): item 4 — persistence — closed
+
+See [ADR-014](ADR-014-persistence-via-append-only-jsonl.md): every store now
+supports optional append-only-JSONL persistence via `AMBIT_DATA_DIR`,
+live-verified across a real process restart. **This closes item 4**, the
+last item this ADR's original Context section named. **All four items of
+this ADR's original bundle are now closed for the specific scope each
+closure targeted.** What was never in this bundle's scope remains exactly
+as open as it always was: `POST /policies`, `PATCH /policies/:id`, and
+`POST /redaction-rules` are still fully unauthenticated (ADR-012 only ever
+closed caller auth for `POST /requests`), `POST /tokens/:id/revoke` remains
+deliberately unauthenticated (ADR-013's own scoping decision), and nothing
+here is a production deployment — it is a demo that now survives its own
+restart, not a system with real operational hardening (rate limiting, log
+rotation, horizontal scaling) beyond what's already named across ADR-009
+through ADR-014.

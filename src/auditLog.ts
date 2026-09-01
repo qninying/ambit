@@ -12,6 +12,7 @@
 // dependency.
 
 import { createHash } from "node:crypto";
+import { appendJsonLine, rehydrateJsonLines } from "./jsonlStore.js";
 
 export interface AuditLogEntry {
   id: string;
@@ -105,8 +106,30 @@ export class MissingReasonCodeError extends Error {
   }
 }
 
+function reviveAuditLogEntry(raw: unknown): AuditLogEntry {
+  const e = raw as AuditLogEntry & { occurredAt: string };
+  return { ...e, occurredAt: new Date(e.occurredAt) };
+}
+
 export class AuditLog {
   #entries: AuditLogEntry[] = [];
+  #persistTo?: string;
+
+  // ADR-014: the audit log is append-only by nature already (record() never
+  // updates an existing entry), the same shape CoreOps's ADR-005 built this
+  // exact pattern for — rehydration replays every persisted entry, in
+  // order, into #entries BEFORE any new record() call, so a hash chain that
+  // continues after a restart links correctly to the last entry that
+  // existed before it, not a fresh genesis entry. Every entry already
+  // carries its own hash/previousHash from when it was first recorded, so
+  // rehydration trusts and loads them rather than recomputing — exactly
+  // what verify() already does when checking any entry array.
+  constructor(persistTo?: string) {
+    this.#persistTo = persistTo;
+    if (persistTo) {
+      this.#entries = rehydrateJsonLines(persistTo, reviveAuditLogEntry);
+    }
+  }
 
   record(entry: Omit<AuditLogEntry, "id" | "occurredAt" | "previousHash" | "hash">, now: Date = new Date()): AuditLogEntry {
     // REQ-010, structural guarantee: not just "every call site today
@@ -127,6 +150,7 @@ export class AuditLog {
     };
     const full: AuditLogEntry = { ...withoutHash, hash: computeEntryHash(withoutHash) };
     this.#entries.push(full);
+    if (this.#persistTo) appendJsonLine(this.#persistTo, full);
     return full;
   }
 

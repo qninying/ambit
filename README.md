@@ -37,11 +37,13 @@ npm run hash-password -- 'pick-any-password'
 ADMIN_USERNAME=admin ADMIN_PASSWORD_HASH='<the printed hash>' SESSION_SIGNING_SECRET='any-long-random-string' npm run start
 ```
 
+To survive a restart (see [ADR-014](adr/ADR-014-persistence-via-append-only-jsonl.md)), add `AMBIT_DATA_DIR=./data` — every store writes append-only JSONL there; unset, everything stays in-memory as before.
+
 ## What's real
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **229 tests passing.**
+in a unit test. Current count: **249 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -189,8 +191,17 @@ in a unit test. Current count: **229 tests passing.**
   (`src/timingSafeCompare.ts`), not a plain `!==`, since it's the one real
   secret comparison anywhere in this codebase.
 
-**What's explicitly not real yet:** persistence. Everything above resets on
-a server restart — an in-memory `Map`-backed store, chosen deliberately (see
-[ADR-006](adr/ADR-006-in-memory-persistence-now.md)) rather than left as an
-accident. Every store's interface is shaped so a real backing store could
-replace it later without touching a single caller.
+- Every store survives a restart when configured to — `AMBIT_DATA_DIR`
+  turns on append-only JSONL persistence (`src/jsonlStore.ts`) for tokens,
+  requests, policies, agent identities, redaction rules, and the audit log,
+  live-verified by killing a running server outright and confirming the
+  same token still enforces, with the same secret, after a real restart
+  (see [ADR-014](adr/ADR-014-persistence-via-append-only-jsonl.md)). Off by
+  default — every existing test's pure-in-memory behavior is unchanged.
+  **What deliberately never touches disk:** ADR-013's transient token
+  secret — an approved-but-unclaimed request's secret is unclaimable after
+  a restart, on purpose, not by accident.
+
+**What's still explicitly not real:** log rotation (the audit log file
+grows unbounded), horizontal scaling (one file per store per process), and
+corruption recovery beyond skip-and-warn on a bad line.

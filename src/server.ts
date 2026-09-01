@@ -58,7 +58,16 @@ function envNumber(name: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-const auditLog = new AuditLog();
+// ADR-014: one directory, not six separate env vars — every store's JSONL
+// file lives under it, named for the store. Unset (the default, and every
+// existing test's behavior) means every store stays purely in-memory,
+// exactly as before this ADR. Set it to survive a restart.
+const dataDir = process.env.AMBIT_DATA_DIR;
+function dataFile(name: string): string | undefined {
+  return dataDir ? path.join(dataDir, `${name}.jsonl`) : undefined;
+}
+
+const auditLog = new AuditLog(dataFile("audit-log"));
 // REQ-008: one shared breaker for both stores — in a real deployment they'd
 // likely sit behind the same backing database, so an outage takes both down
 // together, not independently. Threshold/cooldown overridable via
@@ -79,9 +88,9 @@ const storeCircuitBreaker = new CircuitBreaker(
     }
   },
 );
-const tokenStore = new TokenStore(storeCircuitBreaker);
-const requestStore = new RequestStore();
-const policyStore = new PolicyStore(storeCircuitBreaker);
+const tokenStore = new TokenStore(storeCircuitBreaker, dataFile("tokens"));
+const requestStore = new RequestStore(dataFile("requests"));
+const policyStore = new PolicyStore(storeCircuitBreaker, dataFile("policies"));
 // Thresholds are a judgment call — overridable without a code change via
 // ANOMALY_MAX_SCOPE_BREADTH / ANOMALY_VELOCITY_WINDOW_MS / ANOMALY_MAX_REQUESTS_PER_WINDOW.
 const anomalyDetector = new AnomalyDetector({
@@ -102,24 +111,32 @@ const accessConfig = {
 // extending the breaker's scope to this unrelated dataset wasn't asked for
 // and would be scope creep, not thoroughness.
 const customerDataRegistry = new CustomerDataRegistry();
-const redactionRuleStore = new RedactionRuleStore();
+const redactionRuleStore = new RedactionRuleStore(dataFile("redaction-rules"));
 // A real deployment would let a data privacy officer author this through
 // POST /redaction-rules like any other rule; a demo needs at least one to
 // exist by default so "access customer data" has something to check
 // against without a setup step first.
-const defaultRedactionRule = createRedactionRule(
-  {
-    name: "Standard Customer PII",
-    sensitiveFields: {
-      ssn: "customer:read:ssn",
-      email: "customer:read:email",
-      phone: "customer:read:phone",
+// ADR-014: reuses a rehydrated default rule if one already exists rather
+// than unconditionally creating a new one on every boot — createRedactionRule
+// always mints a fresh id, so without this check, persistence would append a
+// new "Standard Customer PII" rule (with a new id, new audit entry) on every
+// single restart, the exact "works once but breaks on retry" idempotency
+// violation CLAUDE.md calls out as a production defect, not a nitpick.
+const defaultRedactionRule =
+  redactionRuleStore.list().find((r) => r.name === "Standard Customer PII") ??
+  createRedactionRule(
+    {
+      name: "Standard Customer PII",
+      sensitiveFields: {
+        ssn: "customer:read:ssn",
+        email: "customer:read:email",
+        phone: "customer:read:phone",
+      },
     },
-  },
-  "system",
-  redactionRuleStore,
-  auditLog,
-);
+    "system",
+    redactionRuleStore,
+    auditLog,
+  );
 
 // ADR-009 hardening: real operator authentication. ADMIN_USERNAME and
 // ADMIN_PASSWORD_HASH (generate with `npm run hash-password`, never a raw
@@ -144,7 +161,7 @@ function getSessionConfig(): { signingSecret: string; ttlMs?: number } | null {
 // Deliberately NOT wired to storeCircuitBreaker, same reasoning as
 // customerDataRegistry/redactionRuleStore above — REQ-008 names "Policy &
 // Token Store" specifically.
-const agentIdentityStore = new AgentIdentityStore();
+const agentIdentityStore = new AgentIdentityStore(dataFile("agent-identities"));
 
 const app = express();
 app.use(express.json());

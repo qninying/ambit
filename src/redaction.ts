@@ -7,6 +7,7 @@
 
 import type { AuditLog } from "./auditLog.js";
 import type { CustomerRecord } from "./customerData.js";
+import { appendJsonLine, rehydrateJsonLines } from "./jsonlStore.js";
 
 export interface RedactionRule {
   id: string;
@@ -28,11 +29,27 @@ export class InvalidRedactionRuleError extends Error {
   }
 }
 
+function reviveRedactionRule(raw: unknown): RedactionRule {
+  const r = raw as RedactionRule & { createdAt: string };
+  return { ...r, createdAt: new Date(r.createdAt) };
+}
+
 export class RedactionRuleStore {
   #rules = new Map<string, RedactionRule>();
+  #persistTo?: string;
+
+  constructor(persistTo?: string) {
+    this.#persistTo = persistTo;
+    if (persistTo) {
+      for (const rule of rehydrateJsonLines(persistTo, reviveRedactionRule)) {
+        this.#rules.set(rule.id, rule);
+      }
+    }
+  }
 
   save(rule: RedactionRule): void {
     this.#rules.set(rule.id, rule);
+    if (this.#persistTo) appendJsonLine(this.#persistTo, rule);
   }
 
   get(id: string): RedactionRule | undefined {
