@@ -93,17 +93,20 @@ function renderAuthWidget() {
       <input id="auth-username" placeholder="username" autocomplete="username" />
       <label for="auth-password">Password</label>
       <input id="auth-password" type="password" placeholder="password" autocomplete="current-password" />
+      <label for="auth-totp">Authenticator code</label>
+      <input id="auth-totp" placeholder="6-digit code" autocomplete="one-time-code" inputmode="numeric" maxlength="6" />
       <button class="btn btn-primary btn-sm" id="auth-submit">Log in</button>
       <div class="toast" id="auth-toast"></div>
-      <div class="hint">Required to approve/deny requests, create or edit policies and redaction rules, and revoke tokens (ADR-011/ADR-015).</div>
+      <div class="hint">Required to approve/deny requests, create or edit policies and redaction rules, and revoke tokens (ADR-011/ADR-015). MFA required since ADR-017 — enroll with <code>npm run generate-totp-secret</code>.</div>
     </div>`;
   wireAuthPopoverToggle();
   const submit = async () => {
     const uname = document.getElementById("auth-username").value;
     const password = document.getElementById("auth-password").value;
+    const totpCode = document.getElementById("auth-totp").value;
     const toast = document.getElementById("auth-toast");
     try {
-      const { token } = await postJson("/auth/login", { username: uname, password });
+      const { token } = await postJson("/auth/login", { username: uname, password, totpCode });
       setSessionToken(token);
       renderAuthWidget();
       if (refreshTick) refreshTick(true);
@@ -113,7 +116,7 @@ function renderAuthWidget() {
     }
   };
   document.getElementById("auth-submit").addEventListener("click", submit);
-  document.getElementById("auth-password").addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  document.getElementById("auth-totp").addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
 }
 
 function wireAuthPopoverToggle() {

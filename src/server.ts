@@ -35,6 +35,8 @@ import { timingSafeStringEqual } from "./timingSafeCompare.js";
 import { verifyPassword } from "./passwordHash.js";
 import { createSessionToken, verifySessionToken } from "./sessionToken.js";
 import { AgentIdentityStore, DuplicateAgentIdentityError, InvalidAgentIdentityError, authenticateAgent, registerAgentIdentity } from "./agentIdentity.js";
+import { RateLimiter } from "./rateLimiter.js";
+import { TotpVerifier } from "./totp.js";
 
 // ADR-009 hardening: req.session is set only by requireSession (below),
 // once a session token has genuinely verified — never trusted from
@@ -106,6 +108,58 @@ const accessConfig = {
   retryDelayMs: envNumber("ACCESS_RETRY_DELAY_MS"),
 };
 
+// ADR-016 (Control hardening, second slice): closes the rate-limiting gap
+// the INPACT trust scorecard named — grepping this repo for one turned up
+// nothing, so POST /auth/login accepted unlimited password guesses and no
+// route had any flood protection at all. Login gets a deliberately stricter
+// limiter than the general one, since it's the one route where a tight
+// limit closes a real brute-force gap rather than just generic abuse
+// protection. Both overridable via env vars, same "not hardcoded" treatment
+// as every other threshold here — RATE_LIMIT_GENERAL_MAX_REQUESTS /
+// RATE_LIMIT_GENERAL_WINDOW_MS / RATE_LIMIT_LOGIN_MAX_REQUESTS /
+// RATE_LIMIT_LOGIN_WINDOW_MS.
+const generalRateLimiter = new RateLimiter({
+  windowMs: envNumber("RATE_LIMIT_GENERAL_WINDOW_MS") ?? 60_000,
+  maxRequests: envNumber("RATE_LIMIT_GENERAL_MAX_REQUESTS") ?? 120,
+});
+const loginRateLimiter = new RateLimiter({
+  windowMs: envNumber("RATE_LIMIT_LOGIN_WINDOW_MS") ?? 60_000,
+  maxRequests: envNumber("RATE_LIMIT_LOGIN_MAX_REQUESTS") ?? 5,
+});
+
+// Keyed by socket remote address, not X-Forwarded-For — this server has no
+// reverse proxy in front of it in any deployment this repo actually
+// targets, so the socket address is the real, unspoofable client address
+// rather than a header a caller could just set themselves.
+function clientKey(req: express.Request): string {
+  return req.socket.remoteAddress ?? "unknown";
+}
+
+// ADR-017: closes the INPACT Identity dimension's remaining named gap — no
+// second factor on operator login. Not constructed once at module load
+// (this module is imported statically by most test files before their own
+// beforeAll() sets ADMIN_TOTP_SECRET, so an at-import-time read would always
+// see it unset there — the same class of bug getSessionConfig()'s
+// read-fresh-per-request comment above already calls out) and not
+// reconstructed on every request either (a fresh TotpVerifier per request
+// has no memory of the last accepted code, silently disabling its own
+// replay protection). Rebuilt only when the configured secret actually
+// changes, so replay-protection state survives every request that keeps
+// using the same real secret, and a rotation is picked up without a
+// restart — same rotatable-without-restart intent as SESSION_SIGNING_SECRET.
+let cachedTotpVerifier: { secret: string; verifier: TotpVerifier } | null = null;
+function getTotpVerifier(secret: string): TotpVerifier {
+  if (!cachedTotpVerifier || cachedTotpVerifier.secret !== secret) {
+    cachedTotpVerifier = { secret, verifier: new TotpVerifier(secret) };
+  }
+  return cachedTotpVerifier.verifier;
+}
+
+function sendRateLimited(res: express.Response, retryAfterMs: number): void {
+  res.setHeader("Retry-After", Math.ceil(retryAfterMs / 1000).toString());
+  res.status(429).json({ error: "rate limit exceeded — try again shortly" });
+}
+
 // REQ-009: customer data + redaction. Deliberately NOT wired to
 // storeCircuitBreaker — REQ-008 names "Policy & Token Store" specifically;
 // extending the breaker's scope to this unrelated dataset wasn't asked for
@@ -167,27 +221,64 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "public")));
 
-app.post("/auth/login", async (req, res) => {
+// ADR-016: general flood backstop across the whole API — deliberately placed
+// after express.static so a normal page load (fetching the console's own
+// JS/CSS) never counts against it; only requests that fall through to the
+// actual API routes below do.
+app.use((req, res, next) => {
+  const result = generalRateLimiter.check(clientKey(req));
+  if (!result.allowed) {
+    sendRateLimited(res, result.retryAfterMs);
+    return;
+  }
+  next();
+});
+
+// ADR-016: deliberately stricter than the general limiter above — this is
+// the one route where a tight limit closes a real brute-force gap (guessing
+// the operator's password) rather than just generic flood protection.
+function requireLoginRateLimit(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  const result = loginRateLimiter.check(clientKey(req));
+  if (!result.allowed) {
+    sendRateLimited(res, result.retryAfterMs);
+    return;
+  }
+  next();
+}
+
+app.post("/auth/login", requireLoginRateLimit, async (req, res) => {
   const sessionConfig = getSessionConfig();
   const configuredUsername = process.env.ADMIN_USERNAME;
   const configuredHash = process.env.ADMIN_PASSWORD_HASH;
-  if (!sessionConfig || !configuredUsername || !configuredHash) {
-    res.status(503).json({ error: "authentication is not configured — set ADMIN_USERNAME, ADMIN_PASSWORD_HASH, and SESSION_SIGNING_SECRET" });
+  const configuredTotpSecret = process.env.ADMIN_TOTP_SECRET;
+  if (!sessionConfig || !configuredUsername || !configuredHash || !configuredTotpSecret) {
+    res
+      .status(503)
+      .json({ error: "authentication is not configured — set ADMIN_USERNAME, ADMIN_PASSWORD_HASH, ADMIN_TOTP_SECRET, and SESSION_SIGNING_SECRET" });
     return;
   }
-  const { username, password } = req.body ?? {};
-  if (typeof username !== "string" || typeof password !== "string") {
-    res.status(400).json({ error: "username (string) and password (string) are required" });
+  const { username, password, totpCode } = req.body ?? {};
+  if (typeof username !== "string" || typeof password !== "string" || typeof totpCode !== "string") {
+    res.status(400).json({ error: "username (string), password (string), and totpCode (string) are required" });
     return;
   }
   // Username compared timing-safe too — not as sensitive as the password,
   // but there's no reason to leave a cheaper side channel open right next
-  // to a hardened one.
+  // to a hardened one. The TOTP check is deliberately short-circuited behind
+  // username/password, not run unconditionally — same reasoning as CoreOps's
+  // own userDirectory.ts: verify() has a side effect (it burns the timestep
+  // against replay), so a mistyped password must never consume a currently-
+  // valid code the operator still needs to actually use.
   const usernameMatches = timingSafeStringEqual(username, configuredUsername);
   const passwordMatches = await verifyPassword(password, configuredHash);
-  if (!usernameMatches || !passwordMatches) {
+  const credentialsMatch = usernameMatches && passwordMatches;
+  const totpMatches = credentialsMatch && getTotpVerifier(configuredTotpSecret).verify(totpCode);
+  if (!credentialsMatch || !totpMatches) {
     auditLog.record({ subject: username, action: "login", decision: "denied", reasonCode: "invalid_credentials" });
-    res.status(401).json({ error: "invalid username or password" });
+    // Deliberately the same generic message whether the password or the
+    // TOTP code was wrong — naming which factor failed would let a caller
+    // probe them separately instead of needing both at once.
+    res.status(401).json({ error: "invalid username, password, or authentication code" });
     return;
   }
   auditLog.record({ subject: username, action: "login", decision: "allowed" });

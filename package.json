@@ -6,7 +6,8 @@
     "test": "vitest run",
     "build": "tsc --noEmit",
     "start": "tsx src/server.ts",
-    "hash-password": "tsx scripts/hashPassword.ts"
+    "hash-password": "tsx scripts/hashPassword.ts",
+    "generate-totp-secret": "tsx scripts/generateTotpSecret.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

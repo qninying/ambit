@@ -29,12 +29,15 @@ and see the whole sequence land in the Audit Log with its chain-verified
 badge. ⌘K opens a command palette to jump between sections; the theme toggle
 switches light/dark, both persisted per-browser.
 
-Approving or denying a request needs a real operator login:
+Approving or denying a request needs a real operator login — username,
+password, and a TOTP code from an authenticator app
+([ADR-017](adr/ADR-017-totp-mfa.md)):
 
 ```bash
 npm run hash-password -- 'pick-any-password'
-# then, with the printed hash:
-ADMIN_USERNAME=admin ADMIN_PASSWORD_HASH='<the printed hash>' SESSION_SIGNING_SECRET='any-long-random-string' npm run start
+npm run generate-totp-secret -- admin
+# then, with the printed hash and secret:
+ADMIN_USERNAME=admin ADMIN_PASSWORD_HASH='<the printed hash>' ADMIN_TOTP_SECRET='<the printed secret>' SESSION_SIGNING_SECRET='any-long-random-string' npm run start
 ```
 
 To survive a restart (see [ADR-014](adr/ADR-014-persistence-via-append-only-jsonl.md)), add `AMBIT_DATA_DIR=./data` — every store writes append-only JSONL there; unset, everything stays in-memory as before.
@@ -43,7 +46,7 @@ To survive a restart (see [ADR-014](adr/ADR-014-persistence-via-append-only-json
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **260 tests passing.**
+in a unit test. Current count: **289 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -108,6 +111,13 @@ in a unit test. Current count: **260 tests passing.**
   also session-gated (see below and
   [ADR-015](adr/ADR-015-control-hardening-first-slice.md)) — delegation and
   request submission were closed separately by ADR-012/013.
+- That login is a real second factor, not password-only: `POST /auth/login`
+  also requires a current TOTP code (RFC 6238, hand-rolled with
+  `node:crypto`, no new dependency — `src/totp.ts`), short-circuited behind a
+  correct username/password so a mistyped password can never burn a
+  currently-valid code, and rejected with the exact same generic `401` a
+  wrong password gets either way (see
+  [ADR-017](adr/ADR-017-totp-mfa.md)).
 - Submitting a token request requires a real, registered agent credential —
   `POST /requests` no longer accepts `subject` as a plain client-supplied
   field at all; it's derived server-side from an `Authorization: Bearer
@@ -140,11 +150,15 @@ in a unit test. Current count: **260 tests passing.**
   `authoredBy` on policies/redaction-rules and `actor` on a revocation
   (including every child revocation it cascades to) come from that session,
   never a client-supplied field (see
-  [ADR-015](adr/ADR-015-control-hardening-first-slice.md)). **Scoped
-  honestly**: this is the first of two planned steps closing the INPACT
-  trust scorecard's Control gap — rate limiting (the second step) is not
-  yet built, so nothing stops hammering `/auth/login` or any other route
-  with repeated requests.
+  [ADR-015](adr/ADR-015-control-hardening-first-slice.md)).
+- Every route is rate limited — a general flood backstop (120 requests/60s
+  by default) and a deliberately stricter limit on `POST /auth/login`
+  specifically (5/60s by default), both configurable via env vars, not
+  hardcoded. Keyed by IP, blocking applies even to a *correct* password once
+  the limit is hit — it's a real request-count gate, not a check that only
+  fires on failure (see
+  [ADR-016](adr/ADR-016-rate-limiting.md)). **Together, ADR-015 and ADR-016
+  close the INPACT trust scorecard's Control dimension to Band 4.**
 
 **Console**
 - Every backend capability above has a real UI surface, not just an API —

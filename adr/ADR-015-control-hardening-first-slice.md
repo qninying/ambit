@@ -1,6 +1,6 @@
 # ADR-015: Control Hardening, First Slice — Authenticating the Remaining Management Routes
 
-**Status:** Implemented for `POST /policies`, `PATCH /policies/:id`, `POST /redaction-rules`, `POST /tokens/:id/revoke`. Rate limiting (the second half of this Control-hardening initiative) is not yet built — see Consequences.
+**Status:** Implemented for `POST /policies`, `PATCH /policies/:id`, `POST /redaction-rules`, `POST /tokens/:id/revoke`. Rate limiting (the second half of this Control-hardening initiative) shipped separately as [ADR-016](ADR-016-rate-limiting.md) — together the two close Control to Band 4.
 **Owner:** Quincy Nkwain Ninying
 **Date:** 2026-09-01
 **Component:** `src/token.ts`, `src/server.ts`, `public/js/state.js`, `public/js/chrome.js`, `public/js/tabs/policies.js`, `public/js/tabs/redactionRules.js`, `public/js/tabs/tokens/detail.js`
@@ -28,7 +28,7 @@ Ambit's first INPACT trust-posture scorecard (2026-09-01) scored Control at Band
 
 **What this closes:** the four routes named in Context now require a real, verified operator identity, and that identity — not a client-supplied string — is what lands in the audit trail.
 
-**What this does not close, stated plainly:** Control is not yet at Band 4. Rate limiting — the second half of this initiative — is completely unbuilt; nothing stops hammering `/auth/login` with password guesses, or spamming any route with requests. `POST /agent-identities`/`GET /agent-identities` were already session-gated before this ADR (ADR-012) and are unaffected. `POST /requests` remains gated by agent credential, not operator session, unaffected (ADR-012's own scope, a different kind of caller).
+**What this does not close on its own:** at the time this ADR shipped, Control was not yet at Band 4 — rate limiting (the second half of this initiative) followed separately as ADR-016, and the two together are what actually closes the dimension. `POST /agent-identities`/`GET /agent-identities` were already session-gated before this ADR (ADR-012) and are unaffected. `POST /requests` remains gated by agent credential, not operator session, unaffected (ADR-012's own scope, a different kind of caller).
 
 ## Verification
 

@@ -8,6 +8,7 @@ import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { hashPassword } from "../src/passwordHash.js";
 import { app } from "../src/server.js";
+import { generateTotpCode, generateTotpSecret } from "../src/totp.js";
 import { AmbitClient, AmbitClientError } from "./ambitClient.js";
 
 let server: Server;
@@ -20,6 +21,8 @@ beforeAll(async () => {
   process.env.ADMIN_USERNAME = "sdk-test-admin";
   process.env.ADMIN_PASSWORD_HASH = await hashPassword("sdk-test-password");
   process.env.SESSION_SIGNING_SECRET = "sdk-test-signing-secret";
+  const totpSecret = generateTotpSecret();
+  process.env.ADMIN_TOTP_SECRET = totpSecret;
 
   server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -30,11 +33,14 @@ beforeAll(async () => {
   // ADR-009 hardening: requestToken() now needs a real, pre-registered
   // agent credential — same as any real caller would, not a bypass. An
   // operator logs in, registers the agent this SDK instance speaks for,
-  // and the client is configured with the resulting credential.
+  // and the client is configured with the resulting credential. This is
+  // the only login this file performs, so there's no ADR-017 replay
+  // collision to worry about (unlike server.test.ts, which logs in many
+  // times and had to memoize).
   const loginRes = await fetch(`${baseUrl}/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ username: "sdk-test-admin", password: "sdk-test-password" }),
+    body: JSON.stringify({ username: "sdk-test-admin", password: "sdk-test-password", totpCode: generateTotpCode(totpSecret, Date.now()) }),
   });
   const { token: sessionToken } = await loginRes.json();
   adminSessionToken = sessionToken;

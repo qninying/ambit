@@ -10,6 +10,7 @@ import { createServer, type Server } from "node:http";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { hashPassword } from "./passwordHash.js";
 import { app } from "./server.js";
+import { generateTotpCode, generateTotpSecret } from "./totp.js";
 
 let server: Server;
 let baseUrl: string;
@@ -18,6 +19,7 @@ let defaultAgentCredential: string;
 const TEST_ADMIN_USERNAME = "test-admin";
 const TEST_ADMIN_PASSWORD = "correct horse battery staple";
 const TEST_SESSION_SECRET = "test-session-signing-secret-do-not-use-in-prod";
+const TEST_TOTP_SECRET = generateTotpSecret();
 const DEFAULT_AGENT_SUBJECT = "server-test-default-agent";
 
 beforeAll(async () => {
@@ -27,6 +29,7 @@ beforeAll(async () => {
   process.env.ADMIN_USERNAME = TEST_ADMIN_USERNAME;
   process.env.ADMIN_PASSWORD_HASH = await hashPassword(TEST_ADMIN_PASSWORD);
   process.env.SESSION_SIGNING_SECRET = TEST_SESSION_SECRET;
+  process.env.ADMIN_TOTP_SECRET = TEST_TOTP_SECRET;
 
   server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -37,12 +40,10 @@ beforeAll(async () => {
   // ADR-009 hardening: POST /requests now requires a real, pre-registered
   // agent credential. One shared default agent for tests that don't care
   // about the exact subject value — same principle as sdk/ambitClient.test.ts.
-  const loginRes = await fetch(`${baseUrl}/auth/login`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: TEST_ADMIN_PASSWORD }),
-  });
-  const { token: sessionToken } = await loginRes.json();
+  // Goes through the shared login() helper (not a one-off fetch) so it's
+  // the single real TOTP-verified login this whole file performs — see
+  // login()'s own comment for why the rest of the suite reuses its result.
+  const sessionToken = await login();
   const registerRes = await fetch(`${baseUrl}/agent-identities`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
@@ -62,15 +63,33 @@ afterEach(() => {
 
 // Real login, real session token — every test that needs to approve/deny
 // gets one of these rather than a hand-rolled fake, so this suite exercises
-// the actual auth flow, not a bypass of it.
+// the actual auth flow, not a bypass of it. Memoized after the first real
+// call: a real TOTP code can only be verified once (ADR-017's replay
+// protection is real, not a test stub), so a fresh call per test — dozens
+// of them, all inside the same 30-second step — would generate the exact
+// same code and every call after the first would be rejected as a replay.
+// One genuine login proves the wire path works; every other caller in this
+// suite just needs *a* valid session, the same way a real operator doesn't
+// re-login for every single API call either. Dedicated TOTP edge cases
+// (missing code, wrong code, a genuine replay) get their own isolated
+// server in totpLoginWiring.test.ts, where nothing else has touched the
+// TotpVerifier singleton first.
+let cachedSessionToken: string | null = null;
 async function login(): Promise<string> {
+  if (cachedSessionToken) return cachedSessionToken;
   const res = await fetch(`${baseUrl}/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: TEST_ADMIN_PASSWORD }),
+    body: JSON.stringify({
+      username: TEST_ADMIN_USERNAME,
+      password: TEST_ADMIN_PASSWORD,
+      totpCode: generateTotpCode(TEST_TOTP_SECRET, Date.now()),
+    }),
   });
   const body = await res.json();
-  return body.token;
+  const token: string = body.token;
+  cachedSessionToken = token;
+  return token;
 }
 
 describe("POST /circuit-breaker/simulate-outage — admin toggle gate", () => {
@@ -297,22 +316,23 @@ describe("Policy selection is the approver's choice, not the requester's", () =>
 // against the underlying primitives in isolation (those already have their
 // own unit tests in sessionToken.test.ts/passwordHash.test.ts).
 describe("POST /auth/login and requireSession", () => {
-  it("issues a real session token for the correct username and password", async () => {
-    const res = await fetch(`${baseUrl}/auth/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: TEST_ADMIN_PASSWORD }),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(typeof body.token).toBe("string");
+  it("issues a real session token for the correct username, password, and TOTP code", async () => {
+    // Reuses the suite's one real login (see login()'s own comment) rather
+    // than performing a second fresh call here — a second real call with a
+    // freshly-generated code would collide with the one login() already
+    // made inside the same 30-second TOTP step and get rejected as a
+    // replay. What this asserts — a real 200 with a real token — is exactly
+    // what login() already proved by succeeding at all.
+    const token = await login();
+    expect(typeof token).toBe("string");
+    expect(token.length).toBeGreaterThan(0);
   });
 
   it("refuses login with the wrong password, and logs the attempt", async () => {
     const res = await fetch(`${baseUrl}/auth/login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: "wrong-password" }),
+      body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: "wrong-password", totpCode: "000000" }),
     });
     expect(res.status).toBe(401);
 
@@ -329,7 +349,7 @@ describe("POST /auth/login and requireSession", () => {
       const res = await fetch(`${baseUrl}/auth/login`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: TEST_ADMIN_PASSWORD }),
+        body: JSON.stringify({ username: TEST_ADMIN_USERNAME, password: TEST_ADMIN_PASSWORD, totpCode: "000000" }),
       });
       expect(res.status).toBe(503);
     } finally {
