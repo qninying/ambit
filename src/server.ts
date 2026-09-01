@@ -442,10 +442,11 @@ app.post("/tokens/:id/enforce", async (req, res) => {
 // Deliberately NOT possession-checked — revocation is a management action
 // (an operator revoking a leaked or no-longer-needed credential, possibly
 // one they no longer hold the secret for), not a use of the token's own
-// authority. This route remains fully open, exactly as scoped in ADR-009
-// — closing it is a different, still-open item (verified caller identity
-// on every route), not this ADR's job.
-app.post("/tokens/:id/revoke", (req, res) => {
+// authority. ADR-015 (Control hardening): now requires a real operator
+// session instead of being fully open — the actor recorded on the
+// revocation (and every cascaded child revocation it triggers) comes from
+// that session, never a client-supplied field.
+app.post<{ id: string }>("/tokens/:id/revoke", requireSession, (req, res) => {
   const reasonCode = req.body?.reasonCode as RevocationReason | undefined;
   const valid: RevocationReason[] = ["compromised", "no_longer_needed", "policy_violation", "superseded"];
   if (!reasonCode || !valid.includes(reasonCode)) {
@@ -453,7 +454,7 @@ app.post("/tokens/:id/revoke", (req, res) => {
     return;
   }
   try {
-    const token = revokeToken(req.params.id, tokenStore, auditLog, reasonCode);
+    const token = revokeToken(req.params.id, tokenStore, auditLog, reasonCode, undefined, req.session!.username);
     res.status(200).json(withoutSecretHash(token));
   } catch (err) {
     if (err instanceof UnknownTokenError) {
@@ -576,14 +577,17 @@ app.get("/tokens", (_req, res) => {
 // REQ-011/REQ-017: human-authored policies. PATCH, not PUT — a policy
 // modification is a partial change (name/allowedScope/maxTtlSeconds
 // individually), not a full replacement.
-app.post("/policies", (req, res) => {
-  const { name, allowedScope, maxTtlSeconds, authoredBy } = req.body ?? {};
-  if (typeof name !== "string" || !Array.isArray(allowedScope) || typeof maxTtlSeconds !== "number" || typeof authoredBy !== "string") {
-    res.status(400).json({ error: "name (string), allowedScope (string[]), maxTtlSeconds (number), and authoredBy (string) are required" });
+// ADR-015 (Control hardening): requires a real operator session — authoredBy
+// is derived from it, same treatment ADR-011 gave approver and ADR-012 gave
+// subject. A client-supplied authoredBy in the body is silently ignored.
+app.post("/policies", requireSession, (req, res) => {
+  const { name, allowedScope, maxTtlSeconds } = req.body ?? {};
+  if (typeof name !== "string" || !Array.isArray(allowedScope) || typeof maxTtlSeconds !== "number") {
+    res.status(400).json({ error: "name (string), allowedScope (string[]), and maxTtlSeconds (number) are required" });
     return;
   }
   try {
-    const policy = createPolicy({ name, allowedScope, maxTtlSeconds }, authoredBy, policyStore, auditLog);
+    const policy = createPolicy({ name, allowedScope, maxTtlSeconds }, req.session!.username, policyStore, auditLog);
     res.status(201).json(policy);
   } catch (err) {
     if (err instanceof InvalidPolicyError) {
@@ -598,12 +602,8 @@ app.get("/policies", (_req, res) => {
   res.json(policyStore.list());
 });
 
-app.patch("/policies/:id", (req, res) => {
-  const { name, allowedScope, maxTtlSeconds, authoredBy } = req.body ?? {};
-  if (typeof authoredBy !== "string") {
-    res.status(400).json({ error: "authoredBy (string) is required" });
-    return;
-  }
+app.patch<{ id: string }>("/policies/:id", requireSession, (req, res) => {
+  const { name, allowedScope, maxTtlSeconds } = req.body ?? {};
   try {
     const policy = modifyPolicy(
       req.params.id,
@@ -612,7 +612,7 @@ app.patch("/policies/:id", (req, res) => {
         allowedScope: Array.isArray(allowedScope) ? allowedScope : undefined,
         maxTtlSeconds: typeof maxTtlSeconds === "number" ? maxTtlSeconds : undefined,
       },
-      authoredBy,
+      req.session!.username,
       policyStore,
       auditLog,
     );
@@ -632,14 +632,17 @@ app.patch("/policies/:id", (req, res) => {
 // story's acceptance criteria don't ask for "modified rule, changes are
 // applied" the way STORY-007 did for policies, so that surface wasn't
 // built; a new rule is how a mistaken one gets superseded for now.
-app.post("/redaction-rules", (req, res) => {
-  const { name, sensitiveFields, authoredBy } = req.body ?? {};
-  if (typeof name !== "string" || typeof sensitiveFields !== "object" || sensitiveFields === null || Array.isArray(sensitiveFields) || typeof authoredBy !== "string") {
-    res.status(400).json({ error: "name (string), sensitiveFields (object mapping field name to required scope), and authoredBy (string) are required" });
+// ADR-015 (Control hardening): requires a real operator session — this is
+// the route that defines what counts as sensitive customer data, so who
+// can define it matters at least as much as who can create a policy.
+app.post("/redaction-rules", requireSession, (req, res) => {
+  const { name, sensitiveFields } = req.body ?? {};
+  if (typeof name !== "string" || typeof sensitiveFields !== "object" || sensitiveFields === null || Array.isArray(sensitiveFields)) {
+    res.status(400).json({ error: "name (string) and sensitiveFields (object mapping field name to required scope) are required" });
     return;
   }
   try {
-    const rule = createRedactionRule({ name, sensitiveFields }, authoredBy, redactionRuleStore, auditLog);
+    const rule = createRedactionRule({ name, sensitiveFields }, req.session!.username, redactionRuleStore, auditLog);
     res.status(201).json(rule);
   } catch (err) {
     if (err instanceof InvalidRedactionRuleError) {

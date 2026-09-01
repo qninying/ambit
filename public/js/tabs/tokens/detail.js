@@ -1,6 +1,8 @@
 import { STATE, postJson, setFormOpen } from "../../state.js";
 import { esc, fmtTime, tokenStatusBadge, scopeTags } from "../../format.js";
 import { confirmAction } from "../../confirm.js";
+import { currentUsername } from "../../auth.js";
+import { updateAuthWidget } from "../../chrome.js";
 import { renderDelegatePanel } from "./delegate.js";
 import { renderCustomerDataPanel } from "./customerData.js";
 
@@ -84,16 +86,26 @@ export function renderTokenDetail(main, id, tick) {
 
   if (canRevoke) {
     document.getElementById("revoke-btn").addEventListener("click", async () => {
+      const toast = document.getElementById("revoke-toast");
+      // ADR-015: revoking now requires a real operator session (never the
+      // token's own secret — see ADR-013's own scoping note on this route).
+      // Checked client-side first purely as a UX nicety; the server's own
+      // requireSession is what actually enforces it.
+      if (!currentUsername()) {
+        toast.textContent = "Log in first — top right.";
+        toast.className = "toast error";
+        return;
+      }
       const ok = await confirmAction({
         title: "Revoke this token?",
         body: "This immediately blocks the token and cascades to every delegated child. This cannot be undone.",
         confirmLabel: "Revoke token",
       });
       if (!ok) return;
-      const toast = document.getElementById("revoke-toast");
       try {
         await postJson(`/tokens/${token.id}/revoke`, { reasonCode: "compromised" });
       } catch (err) {
+        updateAuthWidget(); // in case a 401 cleared an expired session
         toast.textContent = err.message;
         toast.className = "toast error";
         return;

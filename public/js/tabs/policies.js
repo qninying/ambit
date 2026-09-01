@@ -1,9 +1,14 @@
 import { STATE, postJson, patchJson, setFormOpen } from "../state.js";
 import { esc, fmtTime, scopeTags } from "../format.js";
-import { actingAs } from "../session.js";
+import { currentUsername } from "../auth.js";
+import { updateAuthWidget } from "../chrome.js";
 
+// ADR-015 (Control hardening): creating and editing a policy now requires a
+// real operator session — authoredBy is derived from it server-side, no
+// longer a free-text field the console fills in for you.
 export function renderPolicies(main, tick) {
   main.innerHTML = `
+    ${!currentUsername() ? `<div class="stale-warning">Not signed in — creating or editing a policy needs a real operator login (top right).</div>` : ""}
     <div class="flex-between mb-3"><div></div><button class="btn btn-primary" id="new-policy-btn">+ New policy</button></div>
     <div id="policy-form-slot"></div>
     <div id="policy-list"></div>
@@ -51,7 +56,7 @@ function showPolicyForm(policyId, tick) {
         <div class="field"><label>Name</label><input id="pf-name" value="${policy ? esc(policy.name) : ""}" placeholder="Standard agent access" /></div>
         <div class="field"><label>Allowed scope (comma-separated)</label><input id="pf-scope" value="${policy ? esc(policy.allowedScope.join(", ")) : ""}" placeholder="email:send, crm:read" /></div>
         <div class="field"><label>Max TTL (seconds)</label><input id="pf-ttl" value="${policy ? policy.maxTtlSeconds : ""}" placeholder="3600" /></div>
-        <div class="field"><label>Authored by</label><input id="pf-author" value="${esc(actingAs())}" /></div>
+        <p class="text-tertiary text-xs mt-0 mb-2">Authored by will be recorded as <strong>${esc(currentUsername() || "— log in first —")}</strong>, your real signed-in identity.</p>
         <button class="btn btn-primary" id="pf-save">${policy ? "Save changes" : "Create policy"}</button>
         <button class="btn btn-secondary" id="pf-cancel">Cancel</button>
         <div class="toast" id="pf-toast"></div>
@@ -66,15 +71,20 @@ async function savePolicy(policyId, slot, tick) {
   const name = document.getElementById("pf-name").value.trim();
   const allowedScope = document.getElementById("pf-scope").value.split(",").map((s) => s.trim()).filter(Boolean);
   const maxTtlSeconds = Number(document.getElementById("pf-ttl").value);
-  const authoredBy = document.getElementById("pf-author").value.trim();
   const toast = document.getElementById("pf-toast");
+  if (!currentUsername()) {
+    toast.textContent = "Log in first — top right.";
+    toast.className = "toast error";
+    return;
+  }
   try {
     if (policyId) {
-      await patchJson(`/policies/${policyId}`, { name, allowedScope, maxTtlSeconds, authoredBy });
+      await patchJson(`/policies/${policyId}`, { name, allowedScope, maxTtlSeconds });
     } else {
-      await postJson("/policies", { name, allowedScope, maxTtlSeconds, authoredBy });
+      await postJson("/policies", { name, allowedScope, maxTtlSeconds });
     }
   } catch (err) {
+    updateAuthWidget(); // in case a 401 cleared an expired session
     toast.textContent = err.message;
     toast.className = "toast error";
     return;

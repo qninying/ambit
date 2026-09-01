@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AuditLog } from "./auditLog.js";
 import { UnknownTokenError, enforceToken, issueToken, revokeToken } from "./token.js";
 import { TokenStore } from "./tokenStore.js";
+import { delegateToken } from "./delegation.js";
 
 function setup() {
   return { store: new TokenStore(), auditLog: new AuditLog() };
@@ -87,5 +88,42 @@ describe("revokeToken", () => {
   it("refuses to revoke a token id that was never issued", () => {
     const { store, auditLog } = setup();
     expect(() => revokeToken("not-a-real-id", store, auditLog, "compromised")).toThrow(UnknownTokenError);
+  });
+
+  // ADR-015 (Control hardening): revocation is now gated by a real operator
+  // session at the HTTP boundary — this proves the primitive actually
+  // records who did it, not just that the route requires someone logged in.
+  describe("actor attribution (ADR-015)", () => {
+    it("records the given actor on the revocation's own audit entry", async () => {
+      const { store, auditLog } = setup();
+      const { token } = await issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
+
+      revokeToken(token.id, store, auditLog, "compromised", undefined, "operator-1");
+
+      expect(auditLog.entries()).toContainEqual(
+        expect.objectContaining({ tokenId: token.id, decision: "revoked", actor: "operator-1" }),
+      );
+    });
+
+    it("attributes cascaded child revocations to the same actor who revoked the parent", async () => {
+      const { store, auditLog } = setup();
+      const { token: parent, secret: parentSecret } = await issueToken({ subject: "agent-42", scope: ["email:send", "crm:read"], ttlSeconds: 300 }, store);
+      const childDecision = await delegateToken(parent.id, parentSecret, "subagent", ["email:send"], 60, store, auditLog);
+      if (!childDecision.approved) throw new Error("unreachable");
+
+      revokeToken(parent.id, store, auditLog, "compromised", undefined, "operator-1");
+
+      const childEntry = auditLog.entries().find((e) => e.tokenId === childDecision.token.id && e.decision === "revoked");
+      expect(childEntry).toMatchObject({ actor: "operator-1", reasonCode: "parent_revoked" });
+    });
+
+    it("leaves actor undefined when the caller doesn't supply one, matching every existing direct call site", async () => {
+      const { store, auditLog } = setup();
+      const { token } = await issueToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, store);
+
+      revokeToken(token.id, store, auditLog, "compromised");
+
+      expect(auditLog.entries()[0]?.actor).toBeUndefined();
+    });
   });
 });

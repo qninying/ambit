@@ -4,10 +4,15 @@
 
 import { STATE, postJson, setFormOpen } from "../state.js";
 import { esc, fmtTime } from "../format.js";
-import { actingAs } from "../session.js";
+import { currentUsername } from "../auth.js";
+import { updateAuthWidget } from "../chrome.js";
 
+// ADR-015 (Control hardening): creating a redaction rule now requires a real
+// operator session — authoredBy is derived from it server-side, no longer a
+// free-text field the console fills in for you.
 export function renderRedactionRules(main, tick) {
   main.innerHTML = `
+    ${!currentUsername() ? `<div class="stale-warning">Not signed in — creating a redaction rule needs a real operator login (top right).</div>` : ""}
     <div class="flex-between mb-3"><div></div><button class="btn btn-primary" id="new-rule-btn">+ New rule</button></div>
     <div id="rule-form-slot"></div>
     <div id="rule-list"></div>
@@ -57,7 +62,7 @@ function showRuleForm(tick) {
           <textarea id="rf-fields" rows="4" placeholder="ssn:customer:read:ssn&#10;email:customer:read:email" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius-sm); font-family:var(--font-mono); font-size:12.5px; background:var(--surface); color:var(--text);"></textarea>
           <div class="hint">Each line maps one field name to the scope required to see it unredacted.</div>
         </div>
-        <div class="field"><label>Authored by</label><input id="rf-author" value="${esc(actingAs())}" /></div>
+        <p class="text-tertiary text-xs mt-0 mb-2">Authored by will be recorded as <strong>${esc(currentUsername() || "— log in first —")}</strong>, your real signed-in identity.</p>
         <button class="btn btn-primary" id="rf-save">Create rule</button>
         <button class="btn btn-secondary" id="rf-cancel">Cancel</button>
         <div class="toast" id="rf-toast"></div>
@@ -70,8 +75,12 @@ function showRuleForm(tick) {
 
 async function saveRule(slot, tick) {
   const name = document.getElementById("rf-name").value.trim();
-  const authoredBy = document.getElementById("rf-author").value.trim();
   const toast = document.getElementById("rf-toast");
+  if (!currentUsername()) {
+    toast.textContent = "Log in first — top right.";
+    toast.className = "toast error";
+    return;
+  }
   const lines = document.getElementById("rf-fields").value.split("\n").map((l) => l.trim()).filter(Boolean);
   const sensitiveFields = {};
   for (const line of lines) {
@@ -82,8 +91,9 @@ async function saveRule(slot, tick) {
     if (field && scope) sensitiveFields[field] = scope;
   }
   try {
-    await postJson("/redaction-rules", { name, sensitiveFields, authoredBy });
+    await postJson("/redaction-rules", { name, sensitiveFields });
   } catch (err) {
+    updateAuthWidget(); // in case a 401 cleared an expired session
     toast.textContent = err.message;
     toast.className = "toast error";
     return;

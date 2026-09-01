@@ -43,7 +43,7 @@ To survive a restart (see [ADR-014](adr/ADR-014-persistence-via-append-only-json
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **249 tests passing.**
+in a unit test. Current count: **260 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -102,10 +102,12 @@ in a unit test. Current count: **249 tests passing.**
   covers it completely); `approver` in the audit trail comes from that
   session, never from a field the client sends (see
   [ADR-011](adr/ADR-011-real-operator-authentication-first-slice.md)).
-  **Scoped honestly, not implied broader than it is**: this is the first
+  **Scoped honestly, not implied broader than it is**: this was the first
   slice of [ADR-009](adr/ADR-009-trust-boundary-hardening-deferred-to-post-platform-phase.md)'s
-  hardening phase — every other mutating route (revoke, policy management,
-  redaction rules, delegation, request submission) is still unauthenticated.
+  hardening phase; policy management, redaction rules, and revoke are now
+  also session-gated (see below and
+  [ADR-015](adr/ADR-015-control-hardening-first-slice.md)) — delegation and
+  request submission were closed separately by ADR-012/013.
 - Submitting a token request requires a real, registered agent credential —
   `POST /requests` no longer accepts `subject` as a plain client-supplied
   field at all; it's derived server-side from an `Authorization: Bearer
@@ -115,8 +117,7 @@ in a unit test. Current count: **249 tests passing.**
   credential returned at registration only (see
   [ADR-012](adr/ADR-012-agent-caller-authentication-second-slice.md)).
   **Scoped honestly**: this closes [ADR-009](adr/ADR-009-trust-boundary-hardening-deferred-to-post-platform-phase.md)
-  item 1 for `POST /requests` only — every other mutating route is still
-  unauthenticated, and there's no revoke/rotate path yet for a leaked agent
+  item 1 for `POST /requests` only — there's no revoke/rotate path yet for a leaked agent
   credential.
 - Using an issued token — to enforce it, delegate from it, reach a mock
   endpoint, or read customer data through it — requires proving you hold
@@ -130,9 +131,20 @@ in a unit test. Current count: **249 tests passing.**
   held the parent (see
   [ADR-013](adr/ADR-013-token-possession-proof.md)). **This closes ADR-009
   item 3** for the four routes that actually exercise a token's authority
-  — `POST /tokens/:id/revoke` remains deliberately unauthenticated, since
-  revocation is a management action, not a use of the token's own
-  authority.
+  — `POST /tokens/:id/revoke` is deliberately not possession-checked
+  against the token's own secret (an operator revoking a leaked credential
+  may no longer hold it), though it does require a real operator session
+  (see below).
+- `POST /policies`, `PATCH /policies/:id`, `POST /redaction-rules`, and
+  `POST /tokens/:id/revoke` all require a real operator session —
+  `authoredBy` on policies/redaction-rules and `actor` on a revocation
+  (including every child revocation it cascades to) come from that session,
+  never a client-supplied field (see
+  [ADR-015](adr/ADR-015-control-hardening-first-slice.md)). **Scoped
+  honestly**: this is the first of two planned steps closing the INPACT
+  trust scorecard's Control gap — rate limiting (the second step) is not
+  yet built, so nothing stops hammering `/auth/login` or any other route
+  with repeated requests.
 
 **Console**
 - Every backend capability above has a real UI surface, not just an API —

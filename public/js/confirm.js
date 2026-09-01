@@ -1,7 +1,7 @@
 // Shared confirmation dialog for destructive actions (deny, revoke,
 // simulate-outage). Zero internal dependencies — a leaf module like
-// format.js/session.js/theme.js. Returns a Promise<boolean> so call sites
-// read as `if (!(await confirmAction({...}))) return;`.
+// format.js/theme.js. Returns a Promise<boolean> so call sites read as
+// `if (!(await confirmAction({...}))) return;`.
 
 import { esc } from "./format.js";
 

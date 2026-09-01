@@ -50,9 +50,17 @@ export async function postJson(path, body, extraHeaders) {
   return data;
 }
 
+// ADR-015: same session-attachment/401-clearing treatment as postJson —
+// PATCH /policies/:id now requires one too. This had silently never
+// attached a session token at all before, harmless while nothing PATCH-based
+// required one; a real gap once something did.
 export async function patchJson(path, body) {
-  const res = await fetch(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const token = getSessionToken();
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(path, { method: "PATCH", headers, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) clearSessionToken();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }

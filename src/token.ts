@@ -256,12 +256,21 @@ function decide(token: Token, action: string, now: Date): EnforcementDecision {
 // "revoked" — there's no window where a stale in-flight copy still works.
 export type RevocationReason = "compromised" | "no_longer_needed" | "policy_violation" | "superseded" | "parent_revoked";
 
+// ADR-015 (Control hardening): actor is optional here at the primitive
+// level — every existing direct caller (tests, other internal code) keeps
+// working unchanged — but the real HTTP route (server.ts) now requires a
+// session and always supplies it, so a revocation is genuinely attributable
+// to who did it, not just gated. Cascaded revocations get the same actor:
+// they're a direct, deterministic consequence of that one human's action,
+// not a separate decision, so attributing them to "system" would actually
+// be less accurate, not more neutral.
 export function revokeToken(
   tokenId: string,
   store: TokenStore,
   auditLog: AuditLog,
   reasonCode: RevocationReason,
   now: Date = new Date(),
+  actor?: string,
 ): Token {
   const token = store.get(tokenId);
   if (!token) {
@@ -276,9 +285,10 @@ export function revokeToken(
     action: "revoke",
     decision: "revoked",
     reasonCode,
+    actor,
   }, now);
 
-  cascadeRevoke(tokenId, store, auditLog, now);
+  cascadeRevoke(tokenId, store, auditLog, now, actor);
   return revoked;
 }
 
@@ -287,7 +297,7 @@ export function revokeToken(
 // subagent keeps working after the credential it was derived from no longer
 // does, which is the same class of problem REQ-012 exists to prevent, just
 // surfacing at revocation time instead of delegation time.
-function cascadeRevoke(parentId: string, store: TokenStore, auditLog: AuditLog, now: Date): void {
+function cascadeRevoke(parentId: string, store: TokenStore, auditLog: AuditLog, now: Date, actor?: string): void {
   for (const child of store.childrenOf(parentId)) {
     if (child.status !== "active") continue; // already revoked — don't double-log
     const revokedChild: Token = { ...child, status: "revoked", revokedAt: now, revocationReason: "parent_revoked" };
@@ -298,7 +308,8 @@ function cascadeRevoke(parentId: string, store: TokenStore, auditLog: AuditLog, 
       action: "revoke",
       decision: "revoked",
       reasonCode: "parent_revoked",
+      actor,
     }, now);
-    cascadeRevoke(child.id, store, auditLog, now);
+    cascadeRevoke(child.id, store, auditLog, now, actor);
   }
 }

@@ -201,8 +201,8 @@ describe("POST /tokens/:id/customer-data/:customerId — ignores a caller-suppli
     // honored this, a plain customer:read token would see ssn unredacted.
     const weakRuleRes = await fetch(`${baseUrl}/redaction-rules`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "Deliberately weak", sensitiveFields: { ssn: "customer:read" }, authoredBy: "test" }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${await login()}` },
+      body: JSON.stringify({ name: "Deliberately weak", sensitiveFields: { ssn: "customer:read" } }),
     });
     const weakRule = await weakRuleRes.json();
 
@@ -232,8 +232,8 @@ describe("Policy selection is the approver's choice, not the requester's", () =>
     // on their own request, hoping approveRequest would inherit it.
     const permissiveRes = await fetch(`${baseUrl}/policies`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "Attacker-authored", allowedScope: ["payment:charge"], maxTtlSeconds: 999999, authoredBy: "attacker" }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${await login()}` },
+      body: JSON.stringify({ name: "Attacker-authored", allowedScope: ["payment:charge"], maxTtlSeconds: 999999 }),
     });
     const permissivePolicy = await permissiveRes.json();
 
@@ -263,8 +263,8 @@ describe("Policy selection is the approver's choice, not the requester's", () =>
   it("actually enforces the policy the approver picks at approval time", async () => {
     const restrictiveRes = await fetch(`${baseUrl}/policies`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "Email only, approver-chosen", allowedScope: ["email:send"], maxTtlSeconds: 3600, authoredBy: "privacy-officer" }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${await login()}` },
+      body: JSON.stringify({ name: "Email only, approver-chosen", allowedScope: ["email:send"], maxTtlSeconds: 3600 }),
     });
     const restrictivePolicy = await restrictiveRes.json();
 
@@ -644,20 +644,146 @@ describe("ADR-013: token possession proof", () => {
     expect(await enforceRes.json()).toEqual({ allowed: true });
   });
 
-  // Deliberate scope boundary: revocation is a management action, not a use
-  // of the token's authority, so it stays unauthenticated — same treatment
-  // ADR-009 already gives every other still-open route.
-  it("POST /tokens/:id/revoke remains reachable with no credential at all — deliberately out of this ADR's scope", async () => {
+  // Deliberate scope boundary, unchanged by ADR-015: revocation still isn't
+  // possession-checked against the token's own secret — an operator revoking
+  // a leaked credential may no longer hold that secret at all. What ADR-015
+  // added is that revoking now requires a real operator session, same as
+  // every other management route this Control-hardening slice touched.
+  it("POST /tokens/:id/revoke does not require the token's own secret — deliberately, per ADR-013", async () => {
+    // Deliberately never reads .secret off this — the whole point is that
+    // revoking doesn't need it, only a real operator session does.
     const { tokenId } = await issueTestToken(["email:send"]);
+    const sessionToken = await login();
 
     const res = await fetch(`${baseUrl}/tokens/${tokenId}/revoke`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
       body: JSON.stringify({ reasonCode: "no_longer_needed" }),
     });
     expect(res.status).toBe(200);
     const revoked = await res.json();
     expect(revoked.status).toBe("revoked");
     expect(revoked).not.toHaveProperty("secretHash");
+  });
+});
+
+// ADR-015 (Control hardening, first slice): POST /policies, PATCH
+// /policies/:id, POST /redaction-rules, and POST /tokens/:id/revoke all
+// required no authentication at all before this — verified over real HTTP,
+// same standard as every other trust boundary in this file.
+describe("ADR-015: Control hardening — policies, redaction rules, and revoke require a real operator session", () => {
+  it("refuses to create a policy with no session at all", async () => {
+    const res = await fetch(`${baseUrl}/policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Unauthenticated policy", allowedScope: ["email:send"], maxTtlSeconds: 300 }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("derives authoredBy from the real session, ignoring any authoredBy the client sends", async () => {
+    const sessionToken = await login();
+    const res = await fetch(`${baseUrl}/policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({
+        name: "Session-authored policy",
+        allowedScope: ["email:send"],
+        maxTtlSeconds: 300,
+        authoredBy: "someone-else-entirely",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const policy = await res.json();
+    expect(policy.authoredBy).toBe(TEST_ADMIN_USERNAME);
+  });
+
+  it("refuses to modify a policy with no session at all", async () => {
+    const sessionToken = await login();
+    const createRes = await fetch(`${baseUrl}/policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({ name: "To be edited", allowedScope: ["email:send"], maxTtlSeconds: 300 }),
+    });
+    const policy = await createRes.json();
+
+    const res = await fetch(`${baseUrl}/policies/${policy.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ maxTtlSeconds: 600 }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("derives the modifying policy's authoredBy from the real session too", async () => {
+    const sessionToken = await login();
+    const createRes = await fetch(`${baseUrl}/policies`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({ name: "To be edited again", allowedScope: ["email:send"], maxTtlSeconds: 300 }),
+    });
+    const policy = await createRes.json();
+
+    const patchRes = await fetch(`${baseUrl}/policies/${policy.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({ maxTtlSeconds: 600, authoredBy: "someone-else-entirely" }),
+    });
+    expect(patchRes.status).toBe(200);
+    const modified = await patchRes.json();
+    expect(modified.authoredBy).toBe(TEST_ADMIN_USERNAME);
+  });
+
+  it("refuses to create a redaction rule with no session at all", async () => {
+    const res = await fetch(`${baseUrl}/redaction-rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Unauthenticated rule", sensitiveFields: { ssn: "customer:read:ssn" } }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("derives a redaction rule's authoredBy from the real session, ignoring any authoredBy the client sends", async () => {
+    const sessionToken = await login();
+    const res = await fetch(`${baseUrl}/redaction-rules`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      body: JSON.stringify({
+        name: "Session-authored rule",
+        sensitiveFields: { ssn: "customer:read:ssn" },
+        authoredBy: "someone-else-entirely",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const rule = await res.json();
+    expect(rule.authoredBy).toBe(TEST_ADMIN_USERNAME);
+  });
+
+  it("refuses to revoke a token with no session at all", async () => {
+    const { tokenId } = await issueTestToken(["email:send"]);
+    const res = await fetch(`${baseUrl}/tokens/${tokenId}/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reasonCode: "no_longer_needed" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("records the real session's username as actor on a revocation, never a client-claimed one", async () => {
+    const { tokenId } = await issueTestToken(["email:send"]);
+    const sessionToken = await login();
+
+    await fetch(`${baseUrl}/tokens/${tokenId}/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${sessionToken}` },
+      // A malicious or confused client trying to claim a different identity.
+      body: JSON.stringify({ reasonCode: "no_longer_needed", actor: "someone-else-entirely" }),
+    });
+
+    const entries: Array<Record<string, unknown>> = await fetch(`${baseUrl}/audit-log`).then((r) => r.json());
+    expect(entries).toContainEqual(
+      expect.objectContaining({ tokenId, decision: "revoked", actor: TEST_ADMIN_USERNAME }),
+    );
+    expect(entries.some((e) => e.actor === "someone-else-entirely")).toBe(false);
   });
 });

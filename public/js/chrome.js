@@ -1,17 +1,23 @@
 // Application shell chrome: the app-bar right-side controls (⌘K trigger,
-// circuit-breaker health pill, auth widget, theme toggle, "Acting as" menu).
-// Rendered once at startup, not re-rendered on every poll tick (it's chrome,
-// not tab content) — this is what protects the login/acting-as popovers
-// from a background refresh wiping mid-typed input, the same class of bug
-// ADR-011 had to specifically guard against in the pre-redesign console.
-// updateHealthPill() and updateAuthWidget() are the two explicit,
-// event-triggered exceptions: the former runs on every poll tick (it
-// reflects live-polled data), the latter only after a login/logout/401.
+// circuit-breaker health pill, auth widget, theme toggle). Rendered once at
+// startup, not re-rendered on every poll tick (it's chrome, not tab content)
+// — this is what protects the login popover from a background refresh
+// wiping mid-typed input, the same class of bug ADR-011 had to specifically
+// guard against in the pre-redesign console. updateHealthPill() and
+// updateAuthWidget() are the two explicit, event-triggered exceptions: the
+// former runs on every poll tick (it reflects live-polled data), the latter
+// only after a login/logout/401.
+//
+// ADR-015 (Control hardening): the "Acting as" free-text menu that used to
+// live here is gone — it fed `authoredBy` on policies/redaction-rules,
+// which are now derived from a real operator session instead (same
+// treatment `approver` and `subject` already got from ADR-011/012). A
+// control that no longer does anything real would be a UI lie, not a
+// harmless leftover, so it was removed rather than left in place.
 
 import { STATE, postJson } from "./state.js";
 import { esc, iconSun, iconMoon } from "./format.js";
 import { currentTheme, toggleTheme, initTheme } from "./theme.js";
-import { actingAs, setActingAs } from "./session.js";
 import { currentUsername, setSessionToken, clearSessionToken } from "./auth.js";
 import { openCommandPalette, initCommandPalette } from "./commandPalette.js";
 
@@ -31,14 +37,6 @@ function renderTopbarControls() {
     <span class="health-pill state-closed" id="health-pill"><span class="dot"></span>Store: closed</span>
     <div class="auth-menu" id="auth-menu"></div>
     <button class="icon-btn" id="theme-toggle-btn" type="button" aria-label="Toggle theme" title="Toggle light/dark theme"></button>
-    <div class="acting-as-menu">
-      <button class="acting-as-trigger" id="acting-as-btn" type="button">${esc(actingAs())} ▾</button>
-      <div class="acting-as-popover" id="acting-as-popover" hidden>
-        <label for="acting-as-input">Acting as</label>
-        <input id="acting-as-input" value="${esc(actingAs())}" spellcheck="false" />
-        <div class="hint">The author identity Ambit records on policies and redaction rules you create — those routes have no login (ADR-009). Approving or denying a request uses your real signed-in identity instead, not this field.</div>
-      </div>
-    </div>
   `;
 
   document.getElementById("cmdk-btn").addEventListener("click", () => openCommandPalette());
@@ -47,20 +45,6 @@ function renderTopbarControls() {
   function syncThemeIcon() { themeBtn.innerHTML = currentTheme() === "dark" ? iconSun() : iconMoon(); }
   syncThemeIcon();
   themeBtn.addEventListener("click", () => { toggleTheme(); syncThemeIcon(); });
-
-  const actingBtn = document.getElementById("acting-as-btn");
-  const popover = document.getElementById("acting-as-popover");
-  const input = document.getElementById("acting-as-input");
-  function closePopover() { popover.hidden = true; document.removeEventListener("click", onOutsideClick); }
-  function onOutsideClick(e) { if (!e.target.closest(".acting-as-menu")) closePopover(); }
-  actingBtn.addEventListener("click", () => {
-    popover.hidden = !popover.hidden;
-    if (!popover.hidden) { input.focus(); document.addEventListener("click", onOutsideClick); }
-  });
-  input.addEventListener("change", () => {
-    setActingAs(input.value);
-    actingBtn.textContent = `${actingAs()} ▾`;
-  });
 
   renderAuthWidget();
 }
@@ -111,7 +95,7 @@ function renderAuthWidget() {
       <input id="auth-password" type="password" placeholder="password" autocomplete="current-password" />
       <button class="btn btn-primary btn-sm" id="auth-submit">Log in</button>
       <div class="toast" id="auth-toast"></div>
-      <div class="hint">Required to approve or deny requests (ADR-011). Everything else in this console stays unauthenticated.</div>
+      <div class="hint">Required to approve/deny requests, create or edit policies and redaction rules, and revoke tokens (ADR-011/ADR-015).</div>
     </div>`;
   wireAuthPopoverToggle();
   const submit = async () => {
