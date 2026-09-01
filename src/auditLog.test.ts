@@ -1,8 +1,12 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuditLog, MissingReasonCodeError, computeEntryHash, verifyAuditChain } from "./auditLog.js";
+
+function lineCount(path: string): number {
+  return readFileSync(path, "utf-8").split("\n").filter((l) => l.trim().length > 0).length;
+}
 
 // ADR-014: the audit log is the most safety-critical of the six stores this
 // ADR touches — the real proof isn't just "entries survive a restart," it's
@@ -51,6 +55,91 @@ describe("AuditLog persistence (ADR-014)", () => {
 
     expect(second.previousHash).toBe(first.hash);
     expect(after.verify()).toEqual({ valid: true, brokenAtId: null, entriesChecked: 2 });
+  });
+});
+
+// ADR-018: rotation only ever changes which physical file a line sits in,
+// never the logical history — so the real risk to test for isn't "does
+// rotation happen," it's "does everything downstream (rehydration, the hash
+// chain, in-order history) stay correct once history is split across files."
+describe("AuditLog rotation (ADR-018)", () => {
+  let dir: string;
+  let file: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "ambit-auditlog-rotation-test-"));
+    file = join(dir, "audit-log.jsonl");
+  });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  function record(log: AuditLog, n: number): void {
+    for (let i = 0; i < n; i++) {
+      log.record({ subject: `agent-${i}`, action: "email:send", decision: "allowed" });
+    }
+  }
+
+  it("does not rotate before the threshold is reached", () => {
+    const log = new AuditLog(file, { maxLinesPerSegment: 3 });
+    record(log, 3);
+    expect(lineCount(file)).toBe(3);
+    expect(existsSync(join(dir, "audit-log.1.jsonl"))).toBe(false);
+  });
+
+  it("rotates into a numbered archive segment exactly once the threshold is reached", () => {
+    const log = new AuditLog(file, { maxLinesPerSegment: 3 });
+    record(log, 4);
+    const archive = join(dir, "audit-log.1.jsonl");
+    expect(existsSync(archive)).toBe(true);
+    expect(lineCount(archive)).toBe(3);
+    expect(lineCount(file)).toBe(1);
+  });
+
+  it("rehydrates every entry in order across an archived segment and the active file", () => {
+    const before = new AuditLog(file, { maxLinesPerSegment: 3 });
+    record(before, 4);
+
+    const after = new AuditLog(file, { maxLinesPerSegment: 3 });
+    const entries = after.entries();
+    expect(entries).toHaveLength(4);
+    expect(entries.map((e) => e.subject)).toEqual(["agent-0", "agent-1", "agent-2", "agent-3"]);
+  });
+
+  it("the hash chain still verifies clean across a rotation boundary", () => {
+    const before = new AuditLog(file, { maxLinesPerSegment: 3 });
+    record(before, 4);
+
+    const after = new AuditLog(file, { maxLinesPerSegment: 3 });
+    expect(after.verify()).toEqual({ valid: true, brokenAtId: null, entriesChecked: 4 });
+  });
+
+  it("a new entry recorded after rehydrating across a rotation still links to the real last entry", () => {
+    const before = new AuditLog(file, { maxLinesPerSegment: 3 });
+    record(before, 4);
+    const lastBeforeRestart = before.entries().at(-1)!;
+
+    const after = new AuditLog(file, { maxLinesPerSegment: 3 });
+    const next = after.record({ subject: "agent-4", action: "crm:read", decision: "allowed" });
+
+    expect(next.previousHash).toBe(lastBeforeRestart.hash);
+    expect(after.verify()).toEqual({ valid: true, brokenAtId: null, entriesChecked: 5 });
+  });
+
+  it("multiple sequential rotations produce multiple numbered segments, oldest first", () => {
+    const log = new AuditLog(file, { maxLinesPerSegment: 2 });
+    record(log, 5);
+
+    expect(lineCount(join(dir, "audit-log.1.jsonl"))).toBe(2);
+    expect(lineCount(join(dir, "audit-log.2.jsonl"))).toBe(2);
+    expect(lineCount(file)).toBe(1);
+
+    const rehydrated = new AuditLog(file, { maxLinesPerSegment: 2 });
+    expect(rehydrated.entries().map((e) => e.subject)).toEqual(["agent-0", "agent-1", "agent-2", "agent-3", "agent-4"]);
+  });
+
+  it("the default threshold is high enough that ordinary use never rotates", () => {
+    const log = new AuditLog(file);
+    record(log, 20);
+    expect(existsSync(join(dir, "audit-log.1.jsonl"))).toBe(false);
+    expect(lineCount(file)).toBe(20);
   });
 });
 

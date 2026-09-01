@@ -12,6 +12,8 @@
 // dependency.
 
 import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, renameSync } from "node:fs";
+import { basename, dirname, extname, join } from "node:path";
 import { appendJsonLine, rehydrateJsonLines } from "./jsonlStore.js";
 
 export interface AuditLogEntry {
@@ -111,9 +113,67 @@ function reviveAuditLogEntry(raw: unknown): AuditLogEntry {
   return { ...e, occurredAt: new Date(e.occurredAt) };
 }
 
+export interface AuditLogOptions {
+  // ADR-018: once the active persisted file reaches this many lines, it's
+  // rotated into a numbered archive segment (e.g. audit-log.1.jsonl) and a
+  // fresh active file starts — bounding any single file's size without ever
+  // deleting history, since this is a governance record, not a disposable
+  // debug log. Only meaningful when persistTo is set. Same default CoreOps's
+  // own ADR-005 addendum chose, for the same reason: comfortably above this
+  // system's actual volume, small enough that any archived file stays easy
+  // to open and read directly.
+  maxLinesPerSegment?: number;
+}
+
+const DEFAULT_MAX_LINES_PER_SEGMENT = 5_000;
+
+// Archived segments sit next to the active file, named `<base>.<n><ext>`
+// (audit-log.jsonl -> audit-log.1.jsonl, audit-log.2.jsonl, ...). No
+// separate index file or persisted counter needed — the next index is
+// always derivable by scanning the directory, cheap at this system's
+// volume. Ported from CoreOps's own auditLog.ts (ADR-005 addendum).
+function archiveSegmentPattern(activePath: string): RegExp {
+  const ext = extname(activePath);
+  const base = basename(activePath, ext);
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escape(base)}\\.(\\d+)${escape(ext)}$`);
+}
+
+function scanArchivedSegments(activePath: string): Array<{ path: string; index: number }> {
+  const dir = dirname(activePath);
+  if (!existsSync(dir)) return [];
+  const pattern = archiveSegmentPattern(activePath);
+  return readdirSync(dir)
+    .map((name) => {
+      const match = name.match(pattern);
+      return match ? { path: join(dir, name), index: Number(match[1]) } : null;
+    })
+    .filter((entry): entry is { path: string; index: number } => entry !== null)
+    .sort((a, b) => a.index - b.index);
+}
+
+function nextArchiveSegmentPath(activePath: string): string {
+  const segments = scanArchivedSegments(activePath);
+  const nextIndex = segments.length > 0 ? segments[segments.length - 1]!.index + 1 : 1;
+  const ext = extname(activePath);
+  const base = basename(activePath, ext);
+  return join(dirname(activePath), `${base}.${nextIndex}${ext}`);
+}
+
+// Counts physical non-blank lines, not parsed entries — a corrupted tail
+// line (see rehydrateJsonLines's own skip-and-warn handling) still takes up
+// space in the file and must still count toward the rotation threshold,
+// same reasoning CoreOps's own implementation states for itself.
+function countPhysicalLines(filePath: string): number {
+  if (!existsSync(filePath)) return 0;
+  return readFileSync(filePath, "utf-8").split("\n").filter((line) => line.trim().length > 0).length;
+}
+
 export class AuditLog {
   #entries: AuditLogEntry[] = [];
   #persistTo?: string;
+  #maxLinesPerSegment: number;
+  #currentSegmentLines = 0;
 
   // ADR-014: the audit log is append-only by nature already (record() never
   // updates an existing entry), the same shape CoreOps's ADR-005 built this
@@ -124,11 +184,38 @@ export class AuditLog {
   // carries its own hash/previousHash from when it was first recorded, so
   // rehydration trusts and loads them rather than recomputing — exactly
   // what verify() already does when checking any entry array.
-  constructor(persistTo?: string) {
+  //
+  // ADR-018: archived segments (oldest first, by index) are rehydrated
+  // before the active file, so #entries preserves the same chronological
+  // insertion order a restart always had — verify() itself needs no changes
+  // at all, since it only ever walks this in-memory array and has no idea
+  // how many physical files that array's history is actually split across.
+  constructor(persistTo?: string, options: AuditLogOptions = {}) {
     this.#persistTo = persistTo;
+    this.#maxLinesPerSegment = options.maxLinesPerSegment ?? DEFAULT_MAX_LINES_PER_SEGMENT;
     if (persistTo) {
-      this.#entries = rehydrateJsonLines(persistTo, reviveAuditLogEntry);
+      for (const segment of scanArchivedSegments(persistTo)) {
+        this.#entries.push(...rehydrateJsonLines(segment.path, reviveAuditLogEntry));
+      }
+      this.#entries.push(...rehydrateJsonLines(persistTo, reviveAuditLogEntry));
+      this.#currentSegmentLines = countPhysicalLines(persistTo);
     }
+  }
+
+  // Called immediately before an append, never after — so an archived
+  // segment always ends up with exactly maxLinesPerSegment lines and the
+  // active file never exceeds it. If the active file is already gone (a
+  // rotation happened but the process crashed before the next append
+  // landed), there's nothing to rename; just reset the counter.
+  #rotateIfNeeded(): void {
+    if (!this.#persistTo) return;
+    if (this.#currentSegmentLines < this.#maxLinesPerSegment) return;
+    if (!existsSync(this.#persistTo)) {
+      this.#currentSegmentLines = 0;
+      return;
+    }
+    renameSync(this.#persistTo, nextArchiveSegmentPath(this.#persistTo));
+    this.#currentSegmentLines = 0;
   }
 
   record(entry: Omit<AuditLogEntry, "id" | "occurredAt" | "previousHash" | "hash">, now: Date = new Date()): AuditLogEntry {
@@ -150,7 +237,11 @@ export class AuditLog {
     };
     const full: AuditLogEntry = { ...withoutHash, hash: computeEntryHash(withoutHash) };
     this.#entries.push(full);
-    if (this.#persistTo) appendJsonLine(this.#persistTo, full);
+    if (this.#persistTo) {
+      this.#rotateIfNeeded();
+      appendJsonLine(this.#persistTo, full);
+      this.#currentSegmentLines += 1;
+    }
     return full;
   }
 

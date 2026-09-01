@@ -46,7 +46,7 @@ To survive a restart (see [ADR-014](adr/ADR-014-persistence-via-append-only-json
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **289 tests passing.**
+in a unit test. Current count: **296 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -197,7 +197,13 @@ in a unit test. Current count: **289 tests passing.**
 - A hash-chained audit log: every entry's hash covers its own content plus
   the previous entry's hash, so altering or deleting any entry is detectable,
   not just discouraged by convention. `GET /audit-log/verify` and the
-  Console's Audit Log tab both expose this live.
+  Console's Audit Log tab both expose this live. Rotates into numbered
+  archive segments once the active file reaches a threshold (default 5,000
+  lines) — never deletion, since this is a governance record, not a
+  disposable debug log; the chain still verifies clean across a rotation
+  boundary, because `verify()` only ever walks the in-memory entry history
+  and has no notion of which physical file any entry actually sits in (see
+  [ADR-018](adr/ADR-018-audit-log-rotation.md)).
 - A fail-closed circuit breaker (`src/circuitBreaker.ts`) in front of the
   Token & Policy Store: closed → open after consecutive failures → half-open
   probe after a cooldown → closed again on success. While open, `enforceToken`

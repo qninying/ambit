@@ -69,7 +69,9 @@ function dataFile(name: string): string | undefined {
   return dataDir ? path.join(dataDir, `${name}.jsonl`) : undefined;
 }
 
-const auditLog = new AuditLog(dataFile("audit-log"));
+// ADR-018: rotation threshold overridable, same "not hardcoded" treatment
+// as every other judgment-call threshold here — AUDIT_LOG_MAX_LINES_PER_SEGMENT.
+const auditLog = new AuditLog(dataFile("audit-log"), { maxLinesPerSegment: envNumber("AUDIT_LOG_MAX_LINES_PER_SEGMENT") });
 // REQ-008: one shared breaker for both stores — in a real deployment they'd
 // likely sit behind the same backing database, so an outage takes both down
 // together, not independently. Threshold/cooldown overridable via
