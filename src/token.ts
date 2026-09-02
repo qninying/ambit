@@ -313,3 +313,58 @@ function cascadeRevoke(parentId: string, store: TokenStore, auditLog: AuditLog, 
     cascadeRevoke(child.id, store, auditLog, now, actor);
   }
 }
+
+// ADR-021: closes the INPACT Provenance gap — "the documented lineage of an
+// AI asset, proving where it came from and how it changed." Every fact this
+// needs already existed (parentTokenId, the audit trail); nothing assembled
+// them into one provable record. GET /tokens and GET /audit-log have no
+// query parameters at all, so proving a token's lineage today means
+// fetching everything and cross-referencing by hand.
+export interface TokenLineageOrigin {
+  requestId?: string;
+  policyId?: string;
+  approver?: string;
+}
+
+export interface TokenLineage {
+  // Root-first: chain[0] is the token with no parentTokenId, chain[last] is
+  // the token that was actually asked about. Each entry is the real,
+  // current record from the store — status/revokedAt/revocationReason
+  // included, since a revoked ancestor (and whether it cascaded) is exactly
+  // "how it changed."
+  chain: Token[];
+  // issueToken() has exactly two callers: approveRequest() (a real human
+  // decision, traceable to one request_approved audit entry) and
+  // delegateToken() (possession-based, no separate approval event). A root
+  // token that somehow has no matching audit entry — shouldn't happen given
+  // that closed set, but the lineage should say so plainly rather than
+  // fabricate an origin — gets `origin: null`.
+  origin: TokenLineageOrigin | null;
+}
+
+export function getTokenLineage(tokenId: string, store: TokenStore, auditLog: AuditLog): TokenLineage {
+  const target = store.get(tokenId);
+  if (!target) {
+    throw new UnknownTokenError(`no such token "${tokenId}"`);
+  }
+
+  const chain: Token[] = [target];
+  let current = target;
+  while (current.parentTokenId) {
+    const parent = store.get(current.parentTokenId);
+    // A dangling parentTokenId shouldn't happen (tokens are never deleted,
+    // only revoked) — if it ever did, stop rather than throw, since the
+    // rest of the chain gathered so far is still real and worth returning.
+    if (!parent) break;
+    chain.unshift(parent);
+    current = parent;
+  }
+
+  const root = chain[0]!;
+  const originEntry = auditLog.entries().find((e) => e.tokenId === root.id && e.decision === "request_approved");
+  const origin: TokenLineageOrigin | null = originEntry
+    ? { requestId: originEntry.requestId, policyId: originEntry.policyId, approver: originEntry.actor }
+    : null;
+
+  return { chain, origin };
+}

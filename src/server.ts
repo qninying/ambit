@@ -9,7 +9,16 @@ import express from "express";
 import { AnomalyDetector } from "./anomalyDetector.js";
 import { AuditLog } from "./auditLog.js";
 import { CircuitOpenError, CircuitBreaker } from "./circuitBreaker.js";
-import { InvalidScopeError, PolicyViolationError, UnknownTokenError, enforceToken, revokeToken, type RevocationReason, type Token } from "./token.js";
+import {
+  InvalidScopeError,
+  PolicyViolationError,
+  UnknownTokenError,
+  enforceToken,
+  getTokenLineage,
+  revokeToken,
+  type RevocationReason,
+  type Token,
+} from "./token.js";
 import { delegateToken } from "./delegation.js";
 import {
   RequestNotApprovedError,
@@ -725,6 +734,25 @@ app.post("/circuit-breaker/simulate-outage", requireAdminToggleKey, (req, res) =
 // token's metadata is not the same as being able to use it.
 app.get("/tokens", (_req, res) => {
   res.json(tokenStore.list().map(withoutSecretHash));
+});
+
+// ADR-021: closes the INPACT Provenance gap — one structured, provable
+// answer to "where did this token come from, and how did it change,"
+// rather than requiring a caller to fetch every token and the entire audit
+// log and cross-reference them by hand. Same openness as GET /tokens above
+// — no new access control, since this only assembles already-public
+// information (secretHash stripped from every entry, same as GET /tokens).
+app.get<{ id: string }>("/tokens/:id/lineage", (req, res) => {
+  try {
+    const lineage = getTokenLineage(req.params.id, tokenStore, auditLog);
+    res.json({ chain: lineage.chain.map(withoutSecretHash), origin: lineage.origin });
+  } catch (err) {
+    if (err instanceof UnknownTokenError) {
+      res.status(404).json({ error: err.message });
+    } else {
+      throw err;
+    }
+  }
 });
 
 // REQ-011/REQ-017: human-authored policies. PATCH, not PUT — a policy

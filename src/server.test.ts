@@ -808,6 +808,44 @@ describe("ADR-015: Control hardening — policies, redaction rules, and revoke r
   });
 });
 
+// ADR-021: closes the INPACT Provenance gap over real HTTP. tokenLineage
+// .test.ts already proves getTokenLineage()'s own logic in isolation; this
+// proves the route is really wired in, secretHash is really stripped from
+// every entry (same as GET /tokens), and an unknown id gets a real 404.
+describe("GET /tokens/:id/lineage (ADR-021)", () => {
+  it("a root token's lineage is just itself, with no secretHash on it", async () => {
+    const { tokenId } = await issueTestToken(["email:send", "crm:read"]);
+
+    const res = await fetch(`${baseUrl}/tokens/${tokenId}/lineage`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.chain).toHaveLength(1);
+    expect(body.chain[0].id).toBe(tokenId);
+    expect(body.chain[0].secretHash).toBeUndefined();
+    expect(body.origin.approver).toBe(TEST_ADMIN_USERNAME);
+  });
+
+  it("a delegated token's lineage shows the real root-first chain, over real HTTP", async () => {
+    const { tokenId: rootId, secret: rootSecret } = await issueTestToken(["email:send", "crm:read"]);
+    const delegateRes = await fetch(`${baseUrl}/tokens/${rootId}/delegate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${rootSecret}` },
+      body: JSON.stringify({ subject: "lineage-test-child", scope: ["email:send"], ttlSeconds: 200 }),
+    });
+    const delegated = await delegateRes.json();
+
+    const res = await fetch(`${baseUrl}/tokens/${delegated.token.id}/lineage`);
+    const body = await res.json();
+    expect(body.chain.map((t: { id: string }) => t.id)).toEqual([rootId, delegated.token.id]);
+    expect(body.chain.map((t: { subject: string }) => t.subject)).toEqual([DEFAULT_AGENT_SUBJECT, "lineage-test-child"]);
+  });
+
+  it("refuses with a real 404 for an unknown token id", async () => {
+    const res = await fetch(`${baseUrl}/tokens/no-such-token/lineage`);
+    expect(res.status).toBe(404);
+  });
+});
+
 // ADR-020: the generic error-handling middleware is the single most
 // valuable of this ADR's three logEvent() call sites — it's the one path
 // that catches genuinely unexpected bugs. Malformed JSON in a request body

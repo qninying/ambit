@@ -1,4 +1,4 @@
-import { STATE, postJson, setFormOpen } from "../../state.js";
+import { STATE, fetchJson, postJson, setFormOpen } from "../../state.js";
 import { esc, fmtTime, tokenStatusBadge, scopeTags } from "../../format.js";
 import { confirmAction } from "../../confirm.js";
 import { currentUsername } from "../../auth.js";
@@ -12,7 +12,6 @@ export function renderTokenDetail(main, id, tick) {
     main.innerHTML = `<a class="back-link" href="#tokens">← Tokens</a><div class="empty-state">No token "${esc(id)}" found.</div>`;
     return;
   }
-  const parent = token.parentTokenId ? STATE.tokens.find((t) => t.id === token.parentTokenId) : null;
   const children = STATE.tokens.filter((t) => t.parentTokenId === token.id);
   const canRevoke = token.status === "active";
 
@@ -34,13 +33,9 @@ export function renderTokenDetail(main, id, tick) {
         </div>
 
         <div class="detail-field mb-3">
-          <div class="field-label">Delegation lineage</div>
-          <div class="lineage-chain">
-            ${parent ? `<a class="lineage-node" href="#tokens/${parent.id}">${esc(parent.subject)}</a><span class="lineage-arrow">→</span>` : ""}
-            <span class="lineage-node current">${esc(token.subject)}</span>
-            ${children.length ? `<span class="lineage-arrow">→</span><span class="lineage-children">${children.map((c) => `<a class="lineage-node" href="#tokens/${c.id}">${esc(c.subject)}</a>`).join("")}</span>` : ""}
-          </div>
-          ${!parent && children.length === 0 ? `<p class="text-tertiary text-sm mt-2 mb-0">Root token — no parent, no delegated children.</p>` : ""}
+          <div class="field-label">Provenance — where this token came from, and how it changed</div>
+          <div id="lineage-panel"><p class="text-tertiary text-sm mb-0">Loading lineage…</p></div>
+          ${children.length ? `<div class="lineage-chain mt-2"><span class="text-tertiary text-sm">Delegated to:</span> <span class="lineage-children">${children.map((c) => `<a class="lineage-node" href="#tokens/${c.id}">${esc(c.subject)}</a>`).join("")}</span></div>` : ""}
         </div>
 
         <div class="toast" id="revoke-toast"></div>
@@ -61,6 +56,15 @@ export function renderTokenDetail(main, id, tick) {
       </div>
     </div>
   `;
+
+  // ADR-021: the full root-first ancestry chain plus the root's real origin
+  // (request/policy/approver) — fetched fresh rather than derived from
+  // STATE.tokens/STATE.auditLog client-side, so the Console exercises the
+  // same real, tested assembly logic the API contract actually promises,
+  // not a second reimplementation of it in JS. Fire-and-forget: a detail
+  // view that briefly shows "Loading…" is fine; blocking the whole page
+  // render on this one panel is not.
+  loadLineagePanel(token.id);
 
   // Shared by both subpanels below rather than duplicating the input — a
   // live getter, not a snapshotted value, so it always reads whatever the
@@ -113,4 +117,44 @@ export function renderTokenDetail(main, id, tick) {
       await tick(true);
     });
   }
+}
+
+// ADR-021: renders GET /tokens/:id/lineage's real response — the full
+// root-first ancestry chain, each link showing its own real status (a
+// revoked ancestor shows why, right on its own link — "how it changed"),
+// plus the root's real origin (which request, which policy if any, and who
+// approved it). Guards against a stale write: the operator may have
+// navigated to a different token (or a different tab entirely) before this
+// resolves, since renderTokenDetail() never awaits it.
+async function loadLineagePanel(tokenId) {
+  let lineage;
+  try {
+    lineage = await fetchJson(`/tokens/${tokenId}/lineage`);
+  } catch {
+    const panel = document.getElementById("lineage-panel");
+    if (panel) panel.innerHTML = `<p class="text-tertiary text-sm mb-0">Lineage unavailable.</p>`;
+    return;
+  }
+  const panel = document.getElementById("lineage-panel");
+  if (!panel) return; // navigated away before this resolved
+
+  const chainHtml = lineage.chain
+    .map((t, i) => {
+      const isCurrent = t.id === tokenId;
+      const label = isCurrent ? `<span class="lineage-node current">${esc(t.subject)}</span>` : `<a class="lineage-node" href="#tokens/${t.id}">${esc(t.subject)}</a>`;
+      const badge = tokenStatusBadge(t);
+      const arrow = i > 0 ? `<span class="lineage-arrow">→</span>` : "";
+      return `${arrow}<span class="lineage-link">${label} ${badge}</span>`;
+    })
+    .join("");
+
+  const origin = lineage.origin;
+  const originLine = origin
+    ? `Approved by <strong>${esc(origin.approver || "—")}</strong> · request <span class="mono">${esc(origin.requestId || "—")}</span>${origin.policyId ? ` · policy <span class="mono">${esc(origin.policyId)}</span>` : " · no policy attached"}`
+    : "Origin not found in the audit trail.";
+
+  panel.innerHTML = `
+    <div class="lineage-chain">${chainHtml}</div>
+    <p class="text-tertiary text-sm mt-2 mb-0">${originLine}</p>
+  `;
 }

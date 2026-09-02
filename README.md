@@ -46,7 +46,7 @@ To survive a restart (see [ADR-014](adr/ADR-014-persistence-via-append-only-json
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **324 tests passing.**
+in a unit test. Current count: **334 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -59,6 +59,13 @@ in a unit test. Current count: **324 tests passing.**
   not accepted), its expiry is capped to its parent's regardless of what TTL
   was requested, and revoking a token cascades recursively through every
   descendant it delegated to, multi-level.
+- A token's full, provable lineage on demand — `GET /tokens/:id/lineage`
+  returns the complete root-first delegation chain (each link's own real
+  status, so a revoked ancestor shows why, right there) plus the real
+  request/policy/approver the root came from, assembled server-side instead
+  of requiring a caller to fetch everything and cross-reference it by hand.
+  The Console's token detail view renders this live (see
+  [ADR-021](adr/ADR-021-token-lineage.md)).
 - Every denial from the Enforcement Gateway carries a genuinely detailed
   message, not just a terse code — citing the token's real scope for
   `out_of_scope`, its real issue/expiry timestamps for `expired`, and the
