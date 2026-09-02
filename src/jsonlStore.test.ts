@@ -47,30 +47,34 @@ describe("rehydrateJsonLines", () => {
   // Matches CoreOps's ADR-005: the likely real-world cause is one truncated
   // final line from a crash mid-append — refusing to start over one bad
   // line would be a worse failure mode than losing just that entry.
-  it("skips a corrupted line (not valid JSON) and still returns every valid one, with a warning", () => {
+  // ADR-020: the skip is now a real structured log event (logEvent(), which
+  // writes to console.log), not a bare unstructured console.error string.
+  it("skips a corrupted line (not valid JSON) and still returns every valid one, logging a structured jsonl_line_skipped event", () => {
     appendJsonLine(file, { n: 1 });
     appendFileSync(file, "{not valid json\n");
     appendJsonLine(file, { n: 2 });
 
-    const warnSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const revived = rehydrateJsonLines(file, (raw) => (raw as { n: number }).n);
     expect(revived).toEqual([1, 2]);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    warnSpy.mockRestore();
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(logSpy.mock.calls[0]![0] as string);
+    expect(logged).toMatchObject({ level: "warn", service: "ambit", event: "jsonl_line_skipped", context: { filePath: file, lineNumber: 2 } });
+    logSpy.mockRestore();
   });
 
   it("skips a line that fails the caller's own revive() validation, not just JSON parsing", () => {
     appendJsonLine(file, { n: 1 });
     appendJsonLine(file, { n: "not-a-number" });
 
-    const warnSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const revived = rehydrateJsonLines(file, (raw) => {
       const n = (raw as { n: unknown }).n;
       if (typeof n !== "number") throw new Error("n must be a number");
       return n;
     });
     expect(revived).toEqual([1]);
-    warnSpy.mockRestore();
+    logSpy.mockRestore();
   });
 
   it("ignores trailing blank lines", () => {

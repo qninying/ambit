@@ -7,6 +7,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { logEvent } from "./logger.js";
 
 export function appendJsonLine(filePath: string, value: unknown): void {
   mkdirSync(dirname(filePath), { recursive: true });
@@ -19,10 +20,11 @@ export function appendJsonLine(filePath: string, value: unknown): void {
 // makes a later line for the same id supersede an earlier one, the exact
 // same last-write-wins semantics save() already has in memory — no special
 // "is this an update" logic needed here. A line that fails to parse or
-// fails `revive` is skipped with a loud console.error, not a fatal startup
-// error, matching CoreOps's ADR-005: the likely cause is one truncated
-// final line from a crash mid-append, and refusing to start over one bad
-// line is a worse failure mode than losing just that entry.
+// fails `revive` is skipped with a loud, structured log event (ADR-020),
+// not a fatal startup error, matching CoreOps's ADR-005: the likely cause
+// is one truncated final line from a crash mid-append, and refusing to
+// start over one bad line is a worse failure mode than losing just that
+// entry.
 export function rehydrateJsonLines<T>(filePath: string, revive: (raw: unknown) => T): T[] {
   if (!existsSync(filePath)) return [];
   const lines = readFileSync(filePath, "utf-8").split("\n").filter((line) => line.trim().length > 0);
@@ -31,7 +33,11 @@ export function rehydrateJsonLines<T>(filePath: string, revive: (raw: unknown) =
     try {
       results.push(revive(JSON.parse(line)));
     } catch (err) {
-      console.error(`${filePath}: skipping corrupted line ${index + 1} — ${(err as Error).message}`);
+      logEvent({
+        level: "warn",
+        event: "jsonl_line_skipped",
+        context: { filePath, lineNumber: index + 1, error: (err as Error).message },
+      });
     }
   }
   return results;

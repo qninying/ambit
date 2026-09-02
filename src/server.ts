@@ -39,6 +39,7 @@ import { AgentIdentityStore, DuplicateAgentIdentityError, InvalidAgentIdentityEr
 import { RateLimiter } from "./rateLimiter.js";
 import { TotpVerifier } from "./totp.js";
 import { findAuthenticatedOperator, type OperatorIdentity } from "./operatorDirectory.js";
+import { logEvent } from "./logger.js";
 
 // ADR-009 hardening: req.session is set only by requireSession (below),
 // once a session token has genuinely verified — never trusted from
@@ -855,8 +856,18 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
     res.status(503).json({ error: err.message });
     return;
   }
-  // Never swallow an error — log the real one, but don't leak internals to the caller.
-  console.error(err);
+  // Never swallow an error — log the real one, but don't leak internals to
+  // the caller. ADR-020: structured, with a real error class named — the
+  // single most valuable of this ADR's three call sites, since this is the
+  // one path that catches genuinely unexpected bugs.
+  logEvent({
+    level: "error",
+    event: "unhandled_error",
+    context: {
+      errorClass: err instanceof Error ? err.constructor.name : "Unknown",
+      message: err instanceof Error ? err.message : String(err),
+    },
+  });
   res.status(500).json({ error: "internal error" });
 });
 
@@ -867,7 +878,7 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
 if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT) || 4000;
   const server = app.listen(port, () => {
-    console.log(`ambit server listening on :${port}`);
+    logEvent({ level: "info", event: "server_started", context: { port } });
   });
 
   // Disposability (12-factor): shut down cleanly on SIGTERM rather than being killed hard.

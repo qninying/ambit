@@ -46,7 +46,7 @@ To survive a restart (see [ADR-014](adr/ADR-014-persistence-via-append-only-json
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **319 tests passing.**
+in a unit test. Current count: **324 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -213,6 +213,13 @@ in a unit test. Current count: **319 tests passing.**
   boundary, because `verify()` only ever walks the in-memory entry history
   and has no notion of which physical file any entry actually sits in (see
   [ADR-018](adr/ADR-018-audit-log-rotation.md)).
+- Structured operational logging (`src/logger.ts`), distinct from the audit
+  log above — one JSON line per event (`timestamp`/`level`/`service`/`event`/
+  `context`) to stdout for the things that aren't a domain decision: server
+  startup, a corrupted line skipped during persistence rehydration, and any
+  genuinely unexpected error, tagged with its real error class rather than
+  dumped as a bare object (see
+  [ADR-020](adr/ADR-020-structured-operational-logging.md)).
 - A fail-closed circuit breaker (`src/circuitBreaker.ts`) in front of the
   Token & Policy Store: closed → open after consecutive failures → half-open
   probe after a cooldown → closed again on success. While open, `enforceToken`

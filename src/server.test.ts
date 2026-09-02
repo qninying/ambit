@@ -7,7 +7,7 @@
 // unauthenticated request and zero prior knowledge of any real id.
 
 import { createServer, type Server } from "node:http";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { hashPassword } from "./passwordHash.js";
 import { app } from "./server.js";
 import { generateTotpCode, generateTotpSecret } from "./totp.js";
@@ -805,5 +805,38 @@ describe("ADR-015: Control hardening — policies, redaction rules, and revoke r
       expect.objectContaining({ tokenId, decision: "revoked", actor: TEST_ADMIN_USERNAME }),
     );
     expect(entries.some((e) => e.actor === "someone-else-entirely")).toBe(false);
+  });
+});
+
+// ADR-020: the generic error-handling middleware is the single most
+// valuable of this ADR's three logEvent() call sites — it's the one path
+// that catches genuinely unexpected bugs. Malformed JSON in a request body
+// is a real, natural trigger: express.json() throws a real SyntaxError that
+// Express routes straight to this middleware, the same as any other
+// uncaught exception would — not a synthetic/contrived path.
+describe("ADR-020: the unhandled-error middleware logs a real structured event", () => {
+  it("logs a structured unhandled_error event with a real error class, for a genuinely malformed request body", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const res = await fetch(`${baseUrl}/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{not valid json",
+      });
+      expect(res.status).toBe(500);
+
+      const loggedCalls = logSpy.mock.calls.map((call) => {
+        try {
+          return JSON.parse(call[0] as string);
+        } catch {
+          return null;
+        }
+      });
+      expect(loggedCalls).toContainEqual(
+        expect.objectContaining({ level: "error", service: "ambit", event: "unhandled_error", context: expect.objectContaining({ errorClass: "SyntaxError" }) }),
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });
