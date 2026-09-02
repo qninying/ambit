@@ -30,6 +30,15 @@ export interface PendingRequest extends TokenRequest {
   // by the SDK's timeout-and-retry wrapper) without risking a duplicate
   // pending request — see the idempotency check in requestToken() below.
   idempotencyKey?: string;
+  // ADR-019: who is currently allowed to approve/deny this request — the
+  // primary approver's username at submission time, switched to a real
+  // backup approver's username by checkRequestTimeout() below if the
+  // primary doesn't decide within the configured window. Undefined only in
+  // the legacy/no-auth-configured case (requestToken() was called before
+  // any operator identity existed), which preserves today's "any
+  // authenticated session can decide" behavior rather than making every
+  // existing pending request suddenly undecidable.
+  assignedApprover?: string;
 }
 
 export class UnknownRequestError extends Error {
@@ -76,6 +85,18 @@ export class TokenSecretAlreadyClaimedError extends Error {
   }
 }
 
+// ADR-019: thrown when an authenticated operator who is not the request's
+// currently assigned approver (pending.assignedApprover) attempts to
+// approve or deny it — before or after an escalation. Kept distinct from
+// RequestNotPendingError since the failure reason (wrong person, not wrong
+// state) is a different fact a caller needs to tell apart.
+export class UnauthorizedDeciderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnauthorizedDeciderError";
+  }
+}
+
 // REQ-016: every submission is checked for anomalies automatically, here —
 // not as a separate step a caller could forget to call. The anomaly check
 // only writes an audit entry when something actually fires; a normal request
@@ -92,6 +113,11 @@ export function requestToken(
   requestStore: RequestStore,
   anomalyDetector: AnomalyDetector,
   auditLog: AuditLog,
+  // ADR-019: the primary approver's username at submission time — server.ts
+  // supplies its own ADMIN_USERNAME here; every existing call site (tests,
+  // and any caller that predates this ADR) omits it and gets the legacy
+  // undefined/"any session can decide" behavior unchanged.
+  primaryApprover?: string,
   now: Date = new Date(),
 ): PendingRequest {
   // Idempotency: a caller that retried the same (subject, idempotencyKey)
@@ -108,6 +134,7 @@ export function requestToken(
     id: crypto.randomUUID(),
     status: "pending",
     requestedAt: now,
+    assignedApprover: primaryApprover,
   };
   requestStore.save(pending);
 
@@ -130,6 +157,36 @@ export function requestToken(
   }
 
   return pending;
+}
+
+// ADR-019: shared by approveRequest/denyRequest below — undefined
+// assignedApprover (a request created before any operator identity was
+// configured) preserves today's "any authenticated session can decide"
+// behavior. A defined assignedApprover that doesn't match the caller is
+// rejected, with the rejected attempt itself recorded as its own audit
+// fact (not silently thrown away) before the error propagates.
+function assertEligibleDecider(
+  pending: PendingRequest,
+  approver: string,
+  action: "approve_request" | "deny_request",
+  auditLog: AuditLog,
+  now: Date,
+): void {
+  if (pending.assignedApprover === undefined || pending.assignedApprover === approver) return;
+  auditLog.record(
+    {
+      requestId: pending.id,
+      subject: pending.subject,
+      action,
+      decision: "request_decision_rejected",
+      actor: approver,
+      reasonCode: "not_assigned_approver",
+    },
+    now,
+  );
+  throw new UnauthorizedDeciderError(
+    `"${approver}" is not the assigned approver for request "${pending.id}" ("${pending.assignedApprover}" is)`,
+  );
 }
 
 // ADR-010: policyId is the approver's own choice, supplied here at
@@ -157,6 +214,7 @@ export async function approveRequest(
   now: Date = new Date(),
 ): Promise<Token> {
   const pending = getPending(requestId, requestStore, "approve");
+  assertEligibleDecider(pending, approver, "approve_request", auditLog, now);
 
   let token: Token;
   let secret: string;
@@ -221,6 +279,7 @@ export function denyRequest(
   now: Date = new Date(),
 ): void {
   const pending = getPending(requestId, requestStore, "deny");
+  assertEligibleDecider(pending, approver, "deny_request", auditLog, now);
 
   requestStore.save({ ...pending, status: "denied" });
   auditLog.record({
@@ -231,6 +290,41 @@ export function denyRequest(
     actor: approver,
     reasonCode,
   }, now);
+}
+
+// ADR-019: no scheduler exists in this system (same reality CoreOps's own
+// checkForTimeout() names for itself), so this is checked at the point of
+// use — server.ts calls it immediately before an approve/deny attempt runs,
+// the same "one check right before the decision" placement CoreOps used.
+// Deliberately a no-op with no real backup identity configured: escalating
+// to a placeholder nobody can actually log in as would strand the request
+// with no one able to decide it, which is worse than leaving it assigned
+// to the primary indefinitely.
+export function checkRequestTimeout(
+  requestId: string,
+  requestStore: RequestStore,
+  auditLog: AuditLog,
+  decisionWindowMs: number,
+  backupApprover: string | undefined,
+  now: Date = new Date(),
+): void {
+  if (!backupApprover) return;
+  const pending = requestStore.get(requestId);
+  if (!pending || pending.status !== "pending") return;
+  if (pending.assignedApprover === backupApprover) return; // already escalated
+  if (now.getTime() - pending.requestedAt.getTime() < decisionWindowMs) return;
+
+  requestStore.save({ ...pending, assignedApprover: backupApprover });
+  auditLog.record(
+    {
+      requestId: pending.id,
+      subject: pending.subject,
+      action: "escalate_request",
+      decision: "request_escalated",
+      reasonCode: "decision_window_expired",
+    },
+    now,
+  );
 }
 
 // ADR-013: the one legitimate path a real caller uses to actually receive

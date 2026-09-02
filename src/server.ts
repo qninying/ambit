@@ -15,9 +15,11 @@ import {
   RequestNotApprovedError,
   RequestNotPendingError,
   TokenSecretAlreadyClaimedError,
+  UnauthorizedDeciderError,
   UnknownRequestError,
   WrongSubjectError,
   approveRequest,
+  checkRequestTimeout,
   claimTokenSecret,
   denyRequest,
   requestToken,
@@ -32,11 +34,11 @@ import { CustomerDataRegistry } from "./customerData.js";
 import { InvalidRedactionRuleError, RedactionRuleStore, createRedactionRule } from "./redaction.js";
 import { accessCustomerData } from "./customerDataAccess.js";
 import { timingSafeStringEqual } from "./timingSafeCompare.js";
-import { verifyPassword } from "./passwordHash.js";
 import { createSessionToken, verifySessionToken } from "./sessionToken.js";
 import { AgentIdentityStore, DuplicateAgentIdentityError, InvalidAgentIdentityError, authenticateAgent, registerAgentIdentity } from "./agentIdentity.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { TotpVerifier } from "./totp.js";
+import { findAuthenticatedOperator, type OperatorIdentity } from "./operatorDirectory.js";
 
 // ADR-009 hardening: req.session is set only by requireSession (below),
 // once a session token has genuinely verified — never trusted from
@@ -145,16 +147,41 @@ function clientKey(req: express.Request): string {
 // read-fresh-per-request comment above already calls out) and not
 // reconstructed on every request either (a fresh TotpVerifier per request
 // has no memory of the last accepted code, silently disabling its own
-// replay protection). Rebuilt only when the configured secret actually
-// changes, so replay-protection state survives every request that keeps
-// using the same real secret, and a rotation is picked up without a
-// restart — same rotatable-without-restart intent as SESSION_SIGNING_SECRET.
-let cachedTotpVerifier: { secret: string; verifier: TotpVerifier } | null = null;
+// replay protection). Rebuilt only when a given secret's own configured
+// value actually changes, so replay-protection state survives every
+// request that keeps using the same real secret, and a rotation is picked
+// up without a restart — same rotatable-without-restart intent as
+// SESSION_SIGNING_SECRET.
+//
+// ADR-019: keyed by secret, not a single cached slot — once a second real
+// operator identity can exist, two different secrets are in play on the
+// same server at once, and a single-slot cache would evict one identity's
+// verifier (silently wiping its replay-protection state) every time a
+// login attempt checked the other.
+const totpVerifierCache = new Map<string, TotpVerifier>();
 function getTotpVerifier(secret: string): TotpVerifier {
-  if (!cachedTotpVerifier || cachedTotpVerifier.secret !== secret) {
-    cachedTotpVerifier = { secret, verifier: new TotpVerifier(secret) };
+  let verifier = totpVerifierCache.get(secret);
+  if (!verifier) {
+    verifier = new TotpVerifier(secret);
+    totpVerifierCache.set(secret, verifier);
   }
-  return cachedTotpVerifier.verifier;
+  return verifier;
+}
+
+// ADR-019: an identity's three env vars are all-or-nothing — a partially
+// set identity (e.g. BACKUP_APPROVER_USERNAME set but not the other two) is
+// almost certainly a misconfiguration, not a deliberate partial feature.
+// Failing closed and saying so beats silently skipping it and leaving an
+// operator believing a backup approver is live when it isn't.
+function resolveOperatorIdentity(
+  username: string | undefined,
+  passwordHash: string | undefined,
+  totpSecret: string | undefined,
+): OperatorIdentity | null | "misconfigured" {
+  const setCount = [username, passwordHash, totpSecret].filter((v) => v !== undefined).length;
+  if (setCount === 0) return null;
+  if (setCount < 3) return "misconfigured";
+  return { username: username!, passwordHash: passwordHash!, totpVerifier: getTotpVerifier(totpSecret!) };
 }
 
 function sendRateLimited(res: express.Response, retryAfterMs: number): void {
@@ -250,13 +277,23 @@ function requireLoginRateLimit(req: express.Request, res: express.Response, next
 
 app.post("/auth/login", requireLoginRateLimit, async (req, res) => {
   const sessionConfig = getSessionConfig();
-  const configuredUsername = process.env.ADMIN_USERNAME;
-  const configuredHash = process.env.ADMIN_PASSWORD_HASH;
-  const configuredTotpSecret = process.env.ADMIN_TOTP_SECRET;
-  if (!sessionConfig || !configuredUsername || !configuredHash || !configuredTotpSecret) {
-    res
-      .status(503)
-      .json({ error: "authentication is not configured — set ADMIN_USERNAME, ADMIN_PASSWORD_HASH, ADMIN_TOTP_SECRET, and SESSION_SIGNING_SECRET" });
+  const primary = resolveOperatorIdentity(process.env.ADMIN_USERNAME, process.env.ADMIN_PASSWORD_HASH, process.env.ADMIN_TOTP_SECRET);
+  // ADR-019: BACKUP_APPROVER_* is deliberately optional and NOT fail-fast
+  // the way the primary's three vars are — leaving it unset keeps this a
+  // single-operator deployment exactly as it worked before, matching
+  // CoreOps's own ADR-007 choice. A *partially* configured backup is still
+  // treated as a misconfiguration, same reasoning as the primary.
+  const backup = resolveOperatorIdentity(
+    process.env.BACKUP_APPROVER_USERNAME,
+    process.env.BACKUP_APPROVER_PASSWORD_HASH,
+    process.env.BACKUP_APPROVER_TOTP_SECRET,
+  );
+  if (!sessionConfig || primary === null || primary === "misconfigured" || backup === "misconfigured") {
+    res.status(503).json({
+      error:
+        "authentication is not configured — set ADMIN_USERNAME, ADMIN_PASSWORD_HASH, ADMIN_TOTP_SECRET, and SESSION_SIGNING_SECRET " +
+        "(BACKUP_APPROVER_USERNAME/_PASSWORD_HASH/_TOTP_SECRET are optional, but must be all set together if used)",
+    });
     return;
   }
   const { username, password, totpCode } = req.body ?? {};
@@ -264,27 +301,22 @@ app.post("/auth/login", requireLoginRateLimit, async (req, res) => {
     res.status(400).json({ error: "username (string), password (string), and totpCode (string) are required" });
     return;
   }
-  // Username compared timing-safe too — not as sensitive as the password,
-  // but there's no reason to leave a cheaper side channel open right next
-  // to a hardened one. The TOTP check is deliberately short-circuited behind
-  // username/password, not run unconditionally — same reasoning as CoreOps's
-  // own userDirectory.ts: verify() has a side effect (it burns the timestep
-  // against replay), so a mistyped password must never consume a currently-
-  // valid code the operator still needs to actually use.
-  const usernameMatches = timingSafeStringEqual(username, configuredUsername);
-  const passwordMatches = await verifyPassword(password, configuredHash);
-  const credentialsMatch = usernameMatches && passwordMatches;
-  const totpMatches = credentialsMatch && getTotpVerifier(configuredTotpSecret).verify(totpCode);
-  if (!credentialsMatch || !totpMatches) {
+  // ADR-019: matching now runs against one or two configured identities —
+  // see operatorDirectory.ts for the short-circuit and anti-enumeration
+  // reasoning this preserves from the single-operator version.
+  const identities: OperatorIdentity[] = backup ? [primary, backup] : [primary];
+  const matched = await findAuthenticatedOperator(identities, username, password, totpCode);
+  if (!matched) {
     auditLog.record({ subject: username, action: "login", decision: "denied", reasonCode: "invalid_credentials" });
-    // Deliberately the same generic message whether the password or the
-    // TOTP code was wrong — naming which factor failed would let a caller
-    // probe them separately instead of needing both at once.
+    // Deliberately the same generic message whether the username, password,
+    // or TOTP code was wrong, and regardless of which identity (if either)
+    // partially matched — naming any of that would let a caller probe
+    // factors, or the existence of a second identity, separately.
     res.status(401).json({ error: "invalid username, password, or authentication code" });
     return;
   }
-  auditLog.record({ subject: username, action: "login", decision: "allowed" });
-  const token = createSessionToken(username, sessionConfig);
+  auditLog.record({ subject: matched.username, action: "login", decision: "allowed" });
+  const token = createSessionToken(matched.username, sessionConfig);
   res.status(200).json({ token });
 });
 
@@ -400,6 +432,10 @@ app.post("/requests", requireAgentCredential, (req, res) => {
     requestStore,
     anomalyDetector,
     auditLog,
+    // ADR-019: whoever's configured as the primary approver right now
+    // becomes this request's assigned decider — read fresh per request,
+    // not cached, matching every other auth-config read in this file.
+    process.env.ADMIN_USERNAME,
   );
   res.status(201).json(pending);
 });
@@ -450,6 +486,23 @@ app.post<{ id: string }>("/requests/:id/token-secret", requireAgentCredential, (
   }
 });
 
+// ADR-019: checked immediately before an approve/deny attempt runs — no
+// scheduler exists in this system, so this is the only point escalation
+// can happen. Thresholds read fresh per request, same treatment as every
+// other env-sourced config in this file; a real production default (15
+// minutes) that's overridable for fast verification, unlike CoreOps's own
+// deliberately-fixed 15-minute window — a coding agent verifying this live
+// can't usefully sit idle for 15 real minutes the way a human demo can.
+function checkThisRequestTimeout(requestId: string): void {
+  checkRequestTimeout(
+    requestId,
+    requestStore,
+    auditLog,
+    envNumber("REQUEST_DECISION_WINDOW_MS") ?? 15 * 60_000,
+    process.env.BACKUP_APPROVER_USERNAME,
+  );
+}
+
 // ADR-009 hardening: approver is now the authenticated session's own
 // username — never something the caller types into the request body.
 // ADR-010: policyId is still the approver's own choice, made at approval
@@ -458,6 +511,7 @@ app.post<{ id: string }>("/requests/:id/approve", requireSession, async (req, re
   const approver = req.session!.username;
   const policyId = req.body?.policyId;
   try {
+    checkThisRequestTimeout(req.params.id);
     const token = await approveRequest(
       req.params.id,
       requestStore,
@@ -473,6 +527,8 @@ app.post<{ id: string }>("/requests/:id/approve", requireSession, async (req, re
       res.status(404).json({ error: err.message });
     } else if (err instanceof RequestNotPendingError) {
       res.status(409).json({ error: err.message });
+    } else if (err instanceof UnauthorizedDeciderError) {
+      res.status(403).json({ error: err.message });
     } else {
       throw err;
     }
@@ -494,6 +550,7 @@ app.post<{ id: string }>("/requests/:id/deny", requireSession, (req, res) => {
     return;
   }
   try {
+    checkThisRequestTimeout(req.params.id);
     denyRequest(req.params.id, requestStore, auditLog, approver, reasonCode);
     res.status(204).end();
   } catch (err) {
@@ -501,6 +558,8 @@ app.post<{ id: string }>("/requests/:id/deny", requireSession, (req, res) => {
       res.status(404).json({ error: err.message });
     } else if (err instanceof RequestNotPendingError) {
       res.status(409).json({ error: err.message });
+    } else if (err instanceof UnauthorizedDeciderError) {
+      res.status(403).json({ error: err.message });
     } else {
       throw err;
     }

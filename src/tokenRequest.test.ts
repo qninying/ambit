@@ -9,9 +9,11 @@ import {
   RequestNotApprovedError,
   RequestNotPendingError,
   TokenSecretAlreadyClaimedError,
+  UnauthorizedDeciderError,
   UnknownRequestError,
   WrongSubjectError,
   approveRequest,
+  checkRequestTimeout,
   claimTokenSecret,
   denyRequest,
   requestToken,
@@ -374,5 +376,126 @@ describe("claimTokenSecret", () => {
     claimTokenSecret(pending.id, "agent-42", requestStore, auditLog);
 
     expect(() => claimTokenSecret(pending.id, "agent-42", requestStore, auditLog)).toThrow(TokenSecretAlreadyClaimedError);
+  });
+});
+
+// ADR-019: closes Accountability's single-operator gap — a real assigned
+// decider per request, and real escalation to a backup approver if the
+// primary doesn't act within the configured window.
+describe("assignment & escalation (ADR-019)", () => {
+  it("assigns the primary approver at submission time", () => {
+    const { requestStore, anomalyDetector, auditLog } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog, "primary-op");
+    expect(pending.assignedApprover).toBe("primary-op");
+  });
+
+  it("leaves assignedApprover undefined when no primary approver is supplied — legacy, any session can decide", () => {
+    const { requestStore, anomalyDetector, auditLog } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog);
+    expect(pending.assignedApprover).toBeUndefined();
+  });
+
+  it("the assigned approver can approve normally", async () => {
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog, "primary-op");
+    await expect(approveRequest(pending.id, requestStore, tokenStore, auditLog, "primary-op")).resolves.toBeDefined();
+  });
+
+  it("rejects an approve attempt from someone who isn't the assigned approver, and audits the attempt", async () => {
+    const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog, "primary-op");
+
+    await expect(approveRequest(pending.id, requestStore, tokenStore, auditLog, "someone-else")).rejects.toThrow(UnauthorizedDeciderError);
+    expect(requestStore.get(pending.id)?.status).toBe("pending"); // not consumed
+    expect(auditLog.entries()).toContainEqual(
+      expect.objectContaining({
+        requestId: pending.id,
+        action: "approve_request",
+        decision: "request_decision_rejected",
+        actor: "someone-else",
+        reasonCode: "not_assigned_approver",
+      }),
+    );
+  });
+
+  it("rejects a deny attempt from someone who isn't the assigned approver, and audits the attempt", () => {
+    const { requestStore, auditLog, anomalyDetector } = setup();
+    const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog, "primary-op");
+
+    expect(() => denyRequest(pending.id, requestStore, auditLog, "someone-else", "other")).toThrow(UnauthorizedDeciderError);
+    expect(requestStore.get(pending.id)?.status).toBe("pending");
+    expect(auditLog.entries()).toContainEqual(
+      expect.objectContaining({ requestId: pending.id, action: "deny_request", decision: "request_decision_rejected", actor: "someone-else" }),
+    );
+  });
+
+  describe("checkRequestTimeout", () => {
+    it("never escalates when no backup approver is configured — never strands a request", () => {
+      const { requestStore, auditLog, anomalyDetector } = setup();
+      const now = new Date("2026-01-01T00:00:00Z");
+      const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog, "primary-op", now);
+
+      checkRequestTimeout(pending.id, requestStore, auditLog, 60_000, undefined, new Date(now.getTime() + 3_600_000));
+
+      expect(requestStore.get(pending.id)?.assignedApprover).toBe("primary-op");
+      expect(auditLog.entries().some((e) => e.decision === "request_escalated")).toBe(false);
+    });
+
+    it("does not escalate before the decision window elapses", () => {
+      const { requestStore, auditLog, anomalyDetector } = setup();
+      const now = new Date("2026-01-01T00:00:00Z");
+      const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog, "primary-op", now);
+
+      checkRequestTimeout(pending.id, requestStore, auditLog, 60_000, "backup-op", new Date(now.getTime() + 30_000));
+
+      expect(requestStore.get(pending.id)?.assignedApprover).toBe("primary-op");
+    });
+
+    it("escalates to the backup approver once the decision window elapses, and audits it", () => {
+      const { requestStore, auditLog, anomalyDetector } = setup();
+      const now = new Date("2026-01-01T00:00:00Z");
+      const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog, "primary-op", now);
+
+      checkRequestTimeout(pending.id, requestStore, auditLog, 60_000, "backup-op", new Date(now.getTime() + 60_001));
+
+      expect(requestStore.get(pending.id)?.assignedApprover).toBe("backup-op");
+      expect(auditLog.entries()).toContainEqual(
+        expect.objectContaining({ requestId: pending.id, action: "escalate_request", decision: "request_escalated" }),
+      );
+    });
+
+    it("after escalation, the primary is rejected and the backup can decide", async () => {
+      const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+      const now = new Date("2026-01-01T00:00:00Z");
+      const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog, "primary-op", now);
+      checkRequestTimeout(pending.id, requestStore, auditLog, 60_000, "backup-op", new Date(now.getTime() + 60_001));
+
+      await expect(approveRequest(pending.id, requestStore, tokenStore, auditLog, "primary-op")).rejects.toThrow(UnauthorizedDeciderError);
+      await expect(approveRequest(pending.id, requestStore, tokenStore, auditLog, "backup-op")).resolves.toBeDefined();
+    });
+
+    it("does not escalate a second time, or double-log, once already escalated", () => {
+      const { requestStore, auditLog, anomalyDetector } = setup();
+      const now = new Date("2026-01-01T00:00:00Z");
+      const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog, "primary-op", now);
+      const wayLater = new Date(now.getTime() + 10 * 60_000);
+
+      checkRequestTimeout(pending.id, requestStore, auditLog, 60_000, "backup-op", wayLater);
+      checkRequestTimeout(pending.id, requestStore, auditLog, 60_000, "backup-op", new Date(wayLater.getTime() + 1));
+
+      expect(auditLog.entries().filter((e) => e.decision === "request_escalated")).toHaveLength(1);
+    });
+
+    it("does not escalate a request that has already been decided", async () => {
+      const { requestStore, tokenStore, auditLog, anomalyDetector } = setup();
+      const now = new Date("2026-01-01T00:00:00Z");
+      const pending = requestToken({ subject: "agent-42", scope: ["email:send"], ttlSeconds: 300 }, requestStore, anomalyDetector, auditLog, "primary-op", now);
+      await approveRequest(pending.id, requestStore, tokenStore, auditLog, "primary-op");
+
+      checkRequestTimeout(pending.id, requestStore, auditLog, 60_000, "backup-op", new Date(now.getTime() + 3_600_000));
+
+      expect(requestStore.get(pending.id)?.assignedApprover).toBe("primary-op");
+      expect(auditLog.entries().some((e) => e.decision === "request_escalated")).toBe(false);
+    });
   });
 });

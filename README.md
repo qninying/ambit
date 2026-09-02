@@ -46,7 +46,7 @@ To survive a restart (see [ADR-014](adr/ADR-014-persistence-via-append-only-json
 
 Every claim below has a test behind it and was verified against the real
 running server — over `curl` and through the Browser pane, not just asserted
-in a unit test. Current count: **296 tests passing.**
+in a unit test. Current count: **319 tests passing.**
 
 **Token lifecycle**
 - Short-lived, scoped token issuance (`issueToken`) with strict input
@@ -118,6 +118,15 @@ in a unit test. Current count: **296 tests passing.**
   currently-valid code, and rejected with the exact same generic `401` a
   wrong password gets either way (see
   [ADR-017](adr/ADR-017-totp-mfa.md)).
+- A real second operator identity, with real escalation — an optional
+  `BACKUP_APPROVER_*` identity (unset by default; still single-operator
+  unless configured), and every pending request tracks who's actually
+  allowed to decide it. If the configured decision window elapses
+  unresolved, the assignment switches to the real backup identity and the
+  primary is rejected (`403`) if they try afterward — both the escalation
+  and the rejected attempt land as their own distinct audit facts, not
+  silently folded into an existing decision type (see
+  [ADR-019](adr/ADR-019-second-approver-and-escalation.md)).
 - Submitting a token request requires a real, registered agent credential —
   `POST /requests` no longer accepts `subject` as a plain client-supplied
   field at all; it's derived server-side from an `Authorization: Bearer

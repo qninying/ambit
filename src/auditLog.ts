@@ -34,6 +34,17 @@ export interface AuditLogEntry {
     | "request_submitted"
     | "request_approved"
     | "request_denied"
+    // ADR-019: a request timing out unresolved and switching from the
+    // primary to a real backup approver — an event, not a denial of
+    // anything (the request itself is untouched, still pending).
+    | "request_escalated"
+    // ADR-019: an authenticated operator attempted to approve/deny a
+    // request currently assigned to someone else (before or after an
+    // escalation) — kept distinct from "request_denied" specifically
+    // because the *request* was not decided at all here, only the
+    // attempt was rejected; conflating the two would make the audit
+    // trail claim a real decision happened when it didn't.
+    | "request_decision_rejected"
     | "anomaly_detected"
     | "policy_created"
     | "policy_modified"
@@ -99,7 +110,7 @@ export function verifyAuditChain(entries: readonly AuditLogEntry[]): ChainVerifi
 // denial of an attempted action (the store_unavailable/revoked denials
 // those cause are separately logged as "denied" already), so they're
 // deliberately excluded from this set.
-const DENIAL_DECISIONS: ReadonlySet<AuditLogEntry["decision"]> = new Set(["denied", "request_denied"]);
+const DENIAL_DECISIONS: ReadonlySet<AuditLogEntry["decision"]> = new Set(["denied", "request_denied", "request_decision_rejected"]);
 
 export class MissingReasonCodeError extends Error {
   constructor(message: string) {
